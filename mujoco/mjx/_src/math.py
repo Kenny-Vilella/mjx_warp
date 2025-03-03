@@ -19,6 +19,18 @@ from . import types
 
 
 @wp.func
+def matmul_unroll_33(a: wp.mat33, b: wp.mat33):
+  c = wp.mat33(0.0)
+  for i in range(3):
+    for j in range(3):
+      s = 0.0
+      for k in range(3):
+        s += a[i, k] * b[k, j]
+      c[i, j] = s
+  return c
+
+
+@wp.func
 def mul_quat(u: wp.quat, v: wp.quat) -> wp.quat:
   return wp.quat(
     u[0] * v[0] - u[1] * v[1] - u[2] * v[2] - u[3] * v[3],
@@ -108,6 +120,29 @@ def motion_cross_force(v: wp.spatial_vector, f: wp.spatial_vector) -> wp.spatial
   vel = wp.cross(v0, f1)
 
   return wp.spatial_vector(ang, vel)
+
+
+@wp.func
+def orthogonals(a: wp.vec3):
+  """Returns orthogonal vectors `b` and `c`, given a vector `a`."""
+  y = wp.vec3(0.0, 1.0, 0.0)
+  z = wp.vec3(0.0, 0.0, 1.0)
+  b = wp.select((-0.5 < a[1]) and (a[1] < 0.5), z, y)
+  b = b - a * wp.dot(a, b)
+  # normalize b. however if a is a zero vector, zero b as well.
+  if a[0] != 0.0 or a[1] != 0.0 or a[2] != 0.0:
+    b = wp.normalize(b)
+    return b, wp.cross(a, b)
+  else:
+    return wp.vec3(0.0, 0.0, 0.0), wp.vec3(0.0, 0.0, 0.0)
+
+
+@wp.func
+def make_frame(a: wp.vec3) -> wp.mat33:
+  """Makes a right-handed 3D frame given a direction."""
+  a = wp.normalize(a)
+  b, c = orthogonals(a)
+  return wp.matrix_from_cols(a, b, c)
 
 
 @wp.func

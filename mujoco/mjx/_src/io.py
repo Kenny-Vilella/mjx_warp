@@ -33,6 +33,7 @@ def put_model(mjm: mujoco.MjModel) -> types.Model:
   m.nsite = mjm.nsite
   m.nmocap = mjm.nmocap
   m.nM = mjm.nM
+  m.nexclude = mjm.nexclude
   m.opt.timestep = mjm.opt.timestep
   m.opt.tolerance = mjm.opt.tolerance
   m.opt.ls_tolerance = mjm.opt.ls_tolerance
@@ -53,18 +54,7 @@ def put_model(mjm: mujoco.MjModel) -> types.Model:
   # dof lower triangle row and column indices
   dof_tri_row, dof_tri_col = np.tril_indices(mjm.nv)
 
-  # indices for sparse qM full_m
-  is_, js = [], []
-  for i in range(mjm.nv):
-    j = i
-    while j > -1:
-      is_.append(i)
-      js.append(j)
-      j = mjm.dof_parentid[j]
-  qM_fullm_i = is_
-  qM_fullm_j = js
-
-  # indices for sparse qM mul_m
+  # indices for sparse qM
   is_, js, madr_ijs = [], [], []
   for i in range(mjm.nv):
     madr_ij, j = mjm.dof_Madr[i], i
@@ -75,9 +65,7 @@ def put_model(mjm: mujoco.MjModel) -> types.Model:
         break
       is_, js, madr_ijs = is_ + [i], js + [j], madr_ijs + [madr_ij]
 
-  qM_mulm_i, qM_mulm_j, qM_madr_ij = (
-    np.array(x, dtype=np.int32) for x in (is_, js, madr_ijs)
-  )
+  qM_i, qM_j, qM_madr_ij = (np.array(x, dtype=np.int32) for x in (is_, js, madr_ijs))
 
   jnt_limited_slide_hinge_adr = np.nonzero(
     mjm.jnt_limited
@@ -138,10 +126,8 @@ def put_model(mjm: mujoco.MjModel) -> types.Model:
     qLD_tileadr = np.cumsum(tile_off)[:-1]
     qLD_tilesize = np.array(sorted(tiles.keys()))
 
-  m.qM_fullm_i = wp.array(qM_fullm_i, dtype=wp.int32, ndim=1)
-  m.qM_fullm_j = wp.array(qM_fullm_j, dtype=wp.int32, ndim=1)
-  m.qM_mulm_i = wp.array(qM_mulm_i, dtype=wp.int32, ndim=1)
-  m.qM_mulm_j = wp.array(qM_mulm_j, dtype=wp.int32, ndim=1)
+  m.qM_i = wp.array(qM_i, dtype=wp.int32, ndim=1)
+  m.qM_j = wp.array(qM_j, dtype=wp.int32, ndim=1)
   m.qM_madr_ij = wp.array(qM_madr_ij, dtype=wp.int32, ndim=1)
   m.qLD_update_tree = wp.array(qLD_update_tree, dtype=wp.vec3i, ndim=1)
   m.qLD_update_treeadr = wp.array(
@@ -181,9 +167,18 @@ def put_model(mjm: mujoco.MjModel) -> types.Model:
   m.jnt_stiffness = wp.array(mjm.jnt_stiffness, dtype=wp.float32, ndim=1)
   m.jnt_actfrclimited = wp.array(mjm.jnt_actfrclimited, dtype=wp.bool, ndim=1)
   m.jnt_actfrcrange = wp.array(mjm.jnt_actfrcrange, dtype=wp.vec2, ndim=1)
+  m.geom_type = wp.array(mjm.geom_type, dtype=wp.int32, ndim=1)
   m.geom_bodyid = wp.array(mjm.geom_bodyid, dtype=wp.int32, ndim=1)
   m.geom_pos = wp.array(mjm.geom_pos, dtype=wp.vec3, ndim=1)
   m.geom_quat = wp.array(mjm.geom_quat, dtype=wp.quat, ndim=1)
+  m.geom_priority = wp.array(mjm.geom_priority, dtype=wp.int32, ndim=1)
+  m.geom_solmix = wp.array(mjm.geom_solmix, dtype=wp.float32, ndim=1)
+  m.geom_solref = wp.array(mjm.geom_solref, dtype=wp.float32, ndim=2)
+  m.geom_solimp = wp.array(mjm.geom_solimp, dtype=wp.float32, ndim=2)
+  m.geom_friction = wp.array(mjm.geom_friction, dtype=wp.float32, ndim=2)
+  m.geom_margin = wp.array(mjm.geom_margin, dtype=wp.float32, ndim=1)
+  m.geom_size = wp.array(mjm.geom_size, dtype=wp.vec3, ndim=1)
+  m.geom_gap = wp.array(mjm.geom_gap, dtype=wp.float32, ndim=1)
   m.site_pos = wp.array(mjm.site_pos, dtype=wp.vec3, ndim=1)
   m.site_quat = wp.array(mjm.site_quat, dtype=wp.quat, ndim=1)
   m.dof_bodyid = wp.array(mjm.dof_bodyid, dtype=wp.int32, ndim=1)
@@ -209,6 +204,15 @@ def put_model(mjm: mujoco.MjModel) -> types.Model:
   m.actuator_actadr = wp.array(mjm.actuator_actadr, dtype=wp.int32, ndim=1)
   m.actuator_dyntype = wp.array(mjm.actuator_dyntype, dtype=wp.int32, ndim=1)
   m.actuator_dynprm = wp.array(mjm.actuator_dynprm, dtype=types.vec10f, ndim=1)
+  m.geom_margin = wp.array(mjm.geom_margin, dtype=wp.float32, ndim=1)
+  m.body_geomnum = wp.array(mjm.body_geomnum, dtype=wp.int32, ndim=1)
+  m.body_geomadr = wp.array(mjm.body_geomadr, dtype=wp.int32, ndim=1)
+  m.geom_rbound = wp.array(mjm.geom_rbound, dtype=wp.float32, ndim=1)
+  m.body_parentid = wp.array(mjm.body_parentid, dtype=wp.int32, ndim=1)
+  m.body_weldid = wp.array(mjm.body_weldid, dtype=wp.int32, ndim=1)
+  m.body_contype = wp.array(mjm.body_contype, dtype=wp.int32, ndim=1)
+  m.body_conaffinity = wp.array(mjm.body_conaffinity, dtype=wp.int32, ndim=1)
+  m.exclude_signature = wp.array(mjm.exclude_signature, dtype=wp.int32, ndim=1)
 
   return m
 
@@ -320,9 +324,7 @@ def make_data(
   d.result_count = wp.zeros(nworld, dtype=wp.int32)
 
   # internal broadphase tmp arrays
-  d.boxes_sorted = wp.zeros(
-    (nworld, mjm.ngeom), dtype=wp.types.matrix(shape=(2, 3), dtype=wp.float32)
-  )
+  d.boxes_sorted = wp.zeros((nworld, mjm.ngeom, 2), dtype=wp.vec3)
   d.data_start = wp.zeros((2 * nworld, mjm.ngeom), dtype=wp.float32)
   d.data_end = wp.zeros((nworld, mjm.ngeom), dtype=wp.float32)
   d.data_indexer = wp.zeros((2 * nworld, mjm.ngeom), dtype=wp.int32)
@@ -330,10 +332,17 @@ def make_data(
   d.cumulative_sum = wp.zeros(nworld * mjm.ngeom, dtype=wp.int32)
   segment_indices_list = [i * mjm.ngeom for i in range(nworld + 1)]
   d.segment_indices = wp.array(segment_indices_list, dtype=int)
+  d.dyn_body_aamm = wp.zeros((nworld, mjm.ngeom, 2), dtype=wp.vec3)
 
-  d.geom_aabb = wp.array(
-    mjm.geom_aabb, dtype=wp.types.matrix(shape=(2, 3), dtype=wp.float32), ndim=1
+  # internal narrowphase tmp arrays
+  ngroups = types.NUM_GEOM_TYPES
+  d.narrowphase_candidate_worldid = wp.empty(
+    (ngroups, d.ncon * nworld), dtype=wp.int32, ndim=2
   )
+  d.narrowphase_candidate_geom = wp.empty(
+    (ngroups, d.ncon * nworld), dtype=wp.vec2i, ndim=2
+  )
+  d.narrowphase_candidate_group_count = wp.zeros(ngroups, dtype=wp.int32, ndim=1)
 
   return d
 
@@ -353,11 +362,11 @@ def put_data(
   # TODO(team): move to Model?
   if nconmax == -1:
     # TODO(team): heuristic for nconmax
-    nconmax = max(512, mjd.ncon * nworld)
+    nconmax = 512
   d.nconmax = nconmax
   if njmax == -1:
     # TODO(team): heuristic for njmax
-    njmax = max(512, mjd.nefc * nworld)
+    njmax = 512
   d.njmax = njmax
 
   if nworld * mjd.nefc > njmax:
@@ -375,10 +384,8 @@ def put_data(
   if support.is_sparse(mjm):
     qM = np.expand_dims(mjd.qM, axis=0)
     qLD = np.expand_dims(mjd.qLD, axis=0)
+    # TODO(taylorhowell): sparse efc_J
     efc_J = np.zeros((mjd.nefc, mjm.nv))
-    mujoco.mju_sparse2dense(
-      efc_J, mjd.efc_J, mjd.efc_J_rownnz, mjd.efc_J_rowadr, mjd.efc_J_colind
-    )
   else:
     qM = np.zeros((mjm.nv, mjm.nv))
     mujoco.mj_fullM(mjm, qM, mjd.qM)
@@ -529,6 +536,8 @@ def put_data(
   d.contact.efc_address = wp.array(con_efc_address, dtype=wp.int32, ndim=1)
   d.contact.worldid = wp.array(con_worldid, dtype=wp.int32, ndim=1)
 
+  d.contact_counter = wp.zeros(1, dtype=wp.int32)
+
   d.xfrc_applied = wp.array(tile(mjd.xfrc_applied), dtype=wp.spatial_vector, ndim=2)
   # internal tmp arrays
   d.qfrc_integration = wp.zeros((nworld, mjm.nv), dtype=wp.float32)
@@ -543,9 +552,7 @@ def put_data(
   d.result_count = wp.zeros(nworld, dtype=wp.int32)
 
   # internal broadphase tmp arrays
-  d.boxes_sorted = wp.zeros(
-    (nworld, mjm.ngeom), dtype=wp.types.matrix(shape=(2, 3), dtype=wp.float32)
-  )
+  d.boxes_sorted = wp.zeros((nworld, mjm.ngeom, 2), dtype=wp.vec3)
   d.data_start = wp.zeros((2 * nworld, mjm.ngeom), dtype=wp.float32)
   d.data_end = wp.zeros((nworld, mjm.ngeom), dtype=wp.float32)
   d.data_indexer = wp.zeros((2 * nworld, mjm.ngeom), dtype=wp.int32)
@@ -553,9 +560,16 @@ def put_data(
   d.cumulative_sum = wp.zeros(nworld * mjm.ngeom, dtype=wp.int32)
   segment_indices_list = [i * mjm.ngeom for i in range(nworld + 1)]
   d.segment_indices = wp.array(segment_indices_list, dtype=int)
+  d.dyn_body_aamm = wp.zeros((nworld, mjm.ngeom, 2), dtype=wp.vec3)
 
-  d.geom_aabb = wp.array(
-    mjm.geom_aabb, dtype=wp.types.matrix(shape=(2, 3), dtype=wp.float32), ndim=1
+  # internal narrowphase tmp arrays
+  ngroups = types.NUM_GEOM_TYPES
+  d.narrowphase_candidate_worldid = wp.empty(
+    (ngroups, d.ncon * nworld), dtype=wp.int32, ndim=2
   )
+  d.narrowphase_candidate_geom = wp.empty(
+    (ngroups, d.ncon * nworld), dtype=wp.vec2i, ndim=2
+  )
+  d.narrowphase_candidate_group_count = wp.zeros(ngroups, dtype=wp.int32, ndim=1)
 
   return d

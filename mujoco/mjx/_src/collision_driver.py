@@ -17,59 +17,179 @@ import warp as wp
 
 from .types import Model
 from .types import Data
+from .types import Contact
+from .types import GeomType
+from .types import MJ_MINVAL
+from .types import MJ_NREF
+from .types import MJ_NIMP
+from .types import array2df
+from .types import array3df
+from .types import NUM_GEOM_TYPES
+from .types import vec5
+from .collision_functions import plane_sphere
+from .collision_functions import plane_capsule
+from .collision_functions import plane_ellipsoid
+from .collision_functions import plane_cylinder
+from .collision_functions import plane_convex
+from .collision_functions import hfield_sphere
+from .collision_functions import hfield_capsule
+from .collision_functions import hfield_convex
+from .collision_functions import sphere_sphere
+from .collision_functions import sphere_capsule
+from .collision_functions import sphere_cylinder
+from .collision_functions import sphere_ellipsoid
+from .collision_functions import sphere_convex
+from .collision_functions import capsule_capsule
+from .collision_functions import capsule_convex
+from .collision_functions import capsule_ellipsoid
+from .collision_functions import capsule_cylinder
+from .collision_functions import capsule_convex
+from .collision_functions import ellipsoid_ellipsoid
+from .collision_functions import ellipsoid_cylinder
+from .collision_functions import cylinder_cylinder
+from .collision_functions import box_box
+from .collision_functions import convex_convex
+from .support import where
 
-BoxType = wp.types.matrix(shape=(2, 3), dtype=wp.float32)
 
-
-# TODO: Verify that this is corect
 @wp.func
-def transform_aabb(
-  aabb: wp.types.matrix(shape=(2, 3), dtype=wp.float32),
-  pos: wp.vec3,
-  rot: wp.mat33,
-) -> wp.types.matrix(shape=(2, 3), dtype=wp.float32):
-  # Extract center and extents from AABB
-  center = aabb[0]
-  extents = aabb[1]
+def group_key(type1: wp.int32, type2: wp.int32) -> wp.int32:
+  return type1 + type2 * NUM_GEOM_TYPES
 
-  absRot = rot
-  absRot[0, 0] = wp.abs(rot[0, 0])
-  absRot[0, 1] = wp.abs(rot[0, 1])
-  absRot[0, 2] = wp.abs(rot[0, 2])
-  absRot[1, 0] = wp.abs(rot[1, 0])
-  absRot[1, 1] = wp.abs(rot[1, 1])
-  absRot[1, 2] = wp.abs(rot[1, 2])
-  absRot[2, 0] = wp.abs(rot[2, 0])
-  absRot[2, 1] = wp.abs(rot[2, 1])
-  absRot[2, 2] = wp.abs(rot[2, 2])
-  world_extents = extents * absRot
 
-  # Transform center
-  new_center = rot @ center + pos
+# same order as in MJX - collision function and group key.
+_COLLISION_FUNCS = [
+  (plane_sphere, group_key(GeomType.PLANE.value, GeomType.SPHERE.value)),
+  (plane_capsule, group_key(GeomType.PLANE.value, GeomType.CAPSULE.value)),
+  (plane_convex, group_key(GeomType.PLANE.value, GeomType.BOX.value)),
+  (plane_ellipsoid, group_key(GeomType.PLANE.value, GeomType.ELLIPSOID.value)),
+  (plane_cylinder, group_key(GeomType.PLANE.value, GeomType.CYLINDER.value)),
+  (plane_convex, group_key(GeomType.PLANE.value, GeomType.MESH.value)),
+  (hfield_sphere, group_key(GeomType.HFIELD.value, GeomType.SPHERE.value)),
+  (hfield_capsule, group_key(GeomType.HFIELD.value, GeomType.CAPSULE.value)),
+  (hfield_convex, group_key(GeomType.HFIELD.value, GeomType.BOX.value)),
+  (hfield_convex, group_key(GeomType.HFIELD.value, GeomType.MESH.value)),
+  (sphere_sphere, group_key(GeomType.SPHERE.value, GeomType.SPHERE.value)),
+  (sphere_capsule, group_key(GeomType.SPHERE.value, GeomType.CAPSULE.value)),
+  (sphere_cylinder, group_key(GeomType.SPHERE.value, GeomType.CYLINDER.value)),
+  (sphere_ellipsoid, group_key(GeomType.SPHERE.value, GeomType.ELLIPSOID.value)),
+  (sphere_convex, group_key(GeomType.SPHERE.value, GeomType.BOX.value)),
+  (sphere_convex, group_key(GeomType.SPHERE.value, GeomType.MESH.value)),
+  (capsule_capsule, group_key(GeomType.CAPSULE.value, GeomType.CAPSULE.value)),
+  (capsule_convex, group_key(GeomType.CAPSULE.value, GeomType.BOX.value)),
+  (capsule_ellipsoid, group_key(GeomType.CAPSULE.value, GeomType.ELLIPSOID.value)),
+  (capsule_cylinder, group_key(GeomType.CAPSULE.value, GeomType.CYLINDER.value)),
+  (capsule_convex, group_key(GeomType.CAPSULE.value, GeomType.MESH.value)),
+  (ellipsoid_ellipsoid, group_key(GeomType.ELLIPSOID.value, GeomType.ELLIPSOID.value)),
+  (ellipsoid_cylinder, group_key(GeomType.ELLIPSOID.value, GeomType.CYLINDER.value)),
+  (cylinder_cylinder, group_key(GeomType.CYLINDER.value, GeomType.CYLINDER.value)),
+  (box_box, group_key(GeomType.BOX.value, GeomType.BOX.value)),
+  (convex_convex, group_key(GeomType.BOX.value, GeomType.MESH.value)),
+  (convex_convex, group_key(GeomType.MESH.value, GeomType.MESH.value)),
+]
 
-  # Return new AABB as matrix with center and full size
-  result = BoxType()
-  result[0] = wp.vec3(new_center.x, new_center.y, new_center.z)
-  result[1] = wp.vec3(world_extents.x, world_extents.y, world_extents.z)
-  return result
+#####################################################################################
+# BROADPHASE
+#####################################################################################
+# old kernel for aabb calculation - not sure if this is correct
+# @wp.func
+# def transform_aabb(
+#   aabb: wp.types.matrix(shape=(2, 3), dtype=wp.float32),
+#   pos: wp.vec3,
+#   rot: wp.mat33,
+# ) -> wp.types.matrix(shape=(2, 3), dtype=wp.float32):
+#   # Extract center and extents from AABB
+#   center = aabb[0]
+#   extents = aabb[1]
+
+#   absRot = rot
+#   absRot[0, 0] = wp.abs(rot[0, 0])
+#   absRot[0, 1] = wp.abs(rot[0, 1])
+#   absRot[0, 2] = wp.abs(rot[0, 2])
+#   absRot[1, 0] = wp.abs(rot[1, 0])
+#   absRot[1, 1] = wp.abs(rot[1, 1])
+#   absRot[1, 2] = wp.abs(rot[1, 2])
+#   absRot[2, 0] = wp.abs(rot[2, 0])
+#   absRot[2, 1] = wp.abs(rot[2, 1])
+#   absRot[2, 2] = wp.abs(rot[2, 2])
+#   world_extents = extents * absRot
+
+#   # Transform center
+#   new_center = rot @ center + pos
+
+#   # Return new AABB as matrix with center and full size
+#   result = BoxType()
+#   result[0] = wp.vec3(new_center.x, new_center.y, new_center.z)
+#   result[1] = wp.vec3(world_extents.x, world_extents.y, world_extents.z)
+#   return result
+
+
+# use this kernel to get the AAMM for each body
+@wp.kernel
+def get_dyn_body_aamm(
+  body_geomnum: wp.array(dtype=int),
+  body_geomadr: wp.array(dtype=int),
+  geom_margin: wp.array(dtype=float),
+  geom_xpos: wp.array(dtype=wp.vec3, ndim=2),
+  geom_rbound: wp.array(dtype=float),
+  dyn_body_aamm: wp.array(dtype=wp.vec3, ndim=3),
+):
+  env_id, bid = wp.tid()
+
+  # Initialize AAMM with extreme values
+  aamm_min = wp.vec3(1000000000.0, 1000000000.0, 1000000000.0)
+  aamm_max = wp.vec3(-1000000000.0, -1000000000.0, -1000000000.0)
+
+  # Iterate over all geometries associated with the body
+  for i in range(body_geomnum[bid]):
+    g = body_geomadr[bid] + i
+
+    for j in range(3):
+      pos = geom_xpos[env_id, g][j]
+      rbound = geom_rbound[g]
+      margin = geom_margin[g]
+
+      min_val = pos - rbound - margin
+      max_val = pos + rbound + margin
+
+      aamm_min[j] = wp.min(aamm_min[j], min_val)
+      aamm_max[j] = wp.max(aamm_max[j], max_val)
+
+  # Write results to output
+  dyn_body_aamm[env_id, bid, 0] = aamm_min
+  dyn_body_aamm[env_id, bid, 1] = aamm_max
+
+
+@wp.kernel
+def init_kernel(
+  contact: Contact,
+):
+  contact_id = wp.tid()
+
+  contact.dist[contact_id] = 1e12
+  contact.pos[contact_id] = wp.vec3(0.0)
+  contact.frame[contact_id] = wp.mat33f(0.0)
+  contact.geom[contact_id] = wp.vec2i(-1, -1)
+  contact.includemargin[contact_id] = 0.0
+  contact.solref[contact_id].x = 0.02
+  contact.solref[contact_id].y = 1.0
+  contact.solimp[contact_id] = vec5(0.9, 0.95, 0.001, 0.5, 2.0)
+  contact.friction[contact_id] = vec5(1.0, 1.0, 0.005, 0.0001, 0.0001)
+  contact.solreffriction[contact_id] = wp.vec2(0.0, 0.0)
 
 
 @wp.func
 def overlap(
-  a: wp.types.matrix(shape=(2, 3), dtype=wp.float32),
-  b: wp.types.matrix(shape=(2, 3), dtype=wp.float32),
+  world_id: int,
+  a: int,
+  b: int,
+  boxes: wp.array(dtype=wp.vec3, ndim=3),
 ) -> bool:
   # Extract centers and sizes
-  a_center = a[0]
-  a_size = a[1]
-  b_center = b[0]
-  b_size = b[1]
-
-  # Calculate min/max from center and size
-  a_min = a_center - 0.5 * a_size
-  a_max = a_center + 0.5 * a_size
-  b_min = b_center - 0.5 * b_size
-  b_max = b_center + 0.5 * b_size
+  a_min = boxes[world_id, a, 0]
+  a_max = boxes[world_id, a, 1]
+  b_min = boxes[world_id, b, 0]
+  b_max = boxes[world_id, b, 1]
 
   return not (
     a_min.x > b_max.x
@@ -83,9 +203,7 @@ def overlap(
 
 @wp.kernel
 def broad_phase_project_boxes_onto_sweep_direction_kernel(
-  boxes: wp.array(dtype=wp.types.matrix(shape=(2, 3), dtype=wp.float32), ndim=1),
-  box_translations: wp.array(dtype=wp.vec3, ndim=2),
-  box_rotations: wp.array(dtype=wp.mat33, ndim=2),
+  boxes: wp.array(dtype=wp.vec3, ndim=3),
   data_start: wp.array(dtype=wp.float32, ndim=2),
   data_end: wp.array(dtype=wp.float32, ndim=2),
   data_indexer: wp.array(dtype=wp.int32, ndim=2),
@@ -95,12 +213,14 @@ def broad_phase_project_boxes_onto_sweep_direction_kernel(
 ):
   worldId, i = wp.tid()
 
-  box = boxes[i]  # box is a vector6
-  box = transform_aabb(box, box_translations[worldId, i], box_rotations[worldId, i])
-  box_center = box[0]
-  box_size = box[1]
-  center = wp.dot(direction, box_center)
-  d = wp.dot(box_size, abs_dir)
+  # box = boxes[worldId, i]
+  # box = transform_aabb(box, box_translations[worldId, i], box_rotations[worldId, i])
+  box_min = boxes[worldId, i, 0]
+  box_max = boxes[worldId, i, 1]
+  c = (box_min + box_max) * 0.5
+  box_half_size = (box_max - box_min) * 0.5
+  center = wp.dot(direction, c)
+  d = wp.dot(box_half_size, abs_dir)
   f = center - d
 
   # Store results in the data arrays
@@ -114,10 +234,8 @@ def broad_phase_project_boxes_onto_sweep_direction_kernel(
 
 @wp.kernel
 def reorder_bounding_boxes_kernel(
-  boxes: wp.array(dtype=wp.types.matrix(shape=(2, 3), dtype=wp.float32), ndim=1),
-  box_translations: wp.array(dtype=wp.vec3, ndim=2),
-  box_rotations: wp.array(dtype=wp.mat33, ndim=2),
-  boxes_sorted: wp.array(dtype=wp.types.matrix(shape=(2, 3), dtype=wp.float32), ndim=2),
+  boxes: wp.array(dtype=wp.vec3, ndim=3),
+  boxes_sorted: wp.array(dtype=wp.vec3, ndim=3),
   data_indexer: wp.array(dtype=wp.int32, ndim=2),
 ):
   worldId, i = wp.tid()
@@ -126,13 +244,16 @@ def reorder_bounding_boxes_kernel(
   mapped = data_indexer[worldId, i]
 
   # Get the box from the original boxes array
-  box = boxes[mapped]
-  box = transform_aabb(
-    box, box_translations[worldId, mapped], box_rotations[worldId, mapped]
-  )
+  box_min = boxes[worldId, mapped, 0]
+  box_max = boxes[worldId, mapped, 1]
+
+  # box = transform_aabb(
+  #   box, box_translations[worldId, mapped], box_rotations[worldId, mapped]
+  # )
 
   # Reorder the box into the sorted array
-  boxes_sorted[worldId, i] = box
+  boxes_sorted[worldId, i, 0] = box_min
+  boxes_sorted[worldId, i, 1] = box_max
 
 
 @wp.func
@@ -217,7 +338,16 @@ def broad_phase_sweep_and_prune_kernel(
   data_indexer: wp.array(dtype=wp.int32, ndim=2),
   data_result: wp.array(dtype=wp.vec2i, ndim=2),
   result_count: wp.array(dtype=wp.int32, ndim=1),
-  boxes_sorted: wp.array(dtype=wp.types.matrix(shape=(2, 3), dtype=wp.float32), ndim=2),
+  boxes_sorted: wp.array(dtype=wp.vec3, ndim=3),
+  # The following are used to filter the broadphase pairs
+  # filter_parent: bool,
+  nexclude: int,
+  body_parentid: wp.array(dtype=int),
+  body_weldid: wp.array(dtype=int),
+  body_contype: wp.array(dtype=int),
+  body_conaffinity: wp.array(dtype=int),
+  # body_has_plane: wp.array(dtype=bool),
+  exclude_signature: wp.array(dtype=int),
 ):
   threadId = wp.tid()  # Get thread ID
   if length > 0:
@@ -244,13 +374,49 @@ def broad_phase_sweep_and_prune_kernel(
 
     idx1 = data_indexer[worldId, i]
 
-    box1 = boxes_sorted[worldId, i]
+    # box1 = boxes_sorted[worldId, i]
 
     idx2 = data_indexer[worldId, j]
 
+    body1 = wp.min(idx1, idx2)
+    body2 = wp.max(idx1, idx2)
+
+    # Collision filtering start
+    """
+    if (body_contype[body1] == 0 and body_conaffinity[body1] == 0) or (
+      body_contype[body2] == 0 and body_conaffinity[body2] == 0
+    ):
+      continue
+
+    signature = (body1 << 16) + body2
+    filtered = bool(False)
+    for i in range(nexclude):
+      if exclude_signature[i] == signature:
+        filtered = True
+        break
+
+    if filtered:
+      continue
+
+    w1 = body_weldid[body1]
+    w2 = body_weldid[body2]
+    if w1 == w2:
+      continue
+
+    # Filter parent not supported yet
+    # w1_p = body_weldid[body_parentid[w1]]
+    # w2_p = body_weldid[body_parentid[w2]]
+    # if filter_parent and w1 != 0 and w2 != 0 and (w1 == w2_p or w2 == w1_p):
+    #     continue
+    # Collision filtering end
+    """
+
     # Check if the boxes overlap
-    if idx1 != idx2 and overlap(box1, boxes_sorted[worldId, j]):
-      pair = wp.vec2i(wp.min(idx1, idx2), wp.max(idx1, idx2))
+    if body1 != body2 and overlap(worldId, i, j, boxes_sorted):
+      # if not (body_has_plane[body1] or body_has_plane[body2]):
+      #  return
+
+      pair = wp.vec2i(body1, body2)
 
       id = wp.atomic_add(result_count, worldId, 1)
 
@@ -260,7 +426,104 @@ def broad_phase_sweep_and_prune_kernel(
     threadId += num_threads
 
 
-def broad_phase(m: Model, d: Data) -> Data:
+@wp.kernel
+def get_contact_solver_params_kernel(
+  geom: wp.array(dtype=wp.vec2i),
+  geom_priority: wp.array(dtype=wp.int32),
+  geom_solmix: wp.array(dtype=wp.float32),
+  geom_friction: array2df,
+  geom_solref: array2df,
+  geom_solimp: array2df,
+  geom_margin: wp.array(dtype=wp.float32),
+  geom_gap: wp.array(dtype=wp.float32),
+  contact_counter: wp.array(dtype=wp.int32),
+  # outputs
+  includemargin: wp.array(dtype=wp.float32),
+  friction: wp.array(dtype=vec5),
+  solref: wp.array(dtype=wp.vec2f),
+  solreffriction: wp.array(dtype=wp.vec2f),
+  solimp: wp.array(dtype=vec5),
+):
+  tid = wp.tid()
+
+  n_contact_pts = contact_counter[0]
+  if tid >= n_contact_pts:
+    return
+
+  g1 = geom[tid].x
+  g2 = geom[tid].y
+
+  margin = wp.max(geom_margin[g1], geom_margin[g2])
+  gap = wp.max(geom_gap[g1], geom_gap[g2])
+  solmix1 = geom_solmix[g1]
+  solmix2 = geom_solmix[g2]
+  mix = solmix1 / (solmix1 + solmix2)
+  mix = where((solmix1 < MJ_MINVAL) and (solmix2 < MJ_MINVAL), 0.5, mix)
+  mix = where((solmix1 < MJ_MINVAL) and (solmix2 >= MJ_MINVAL), 0.0, mix)
+  mix = where((solmix1 >= MJ_MINVAL) and (solmix2 < MJ_MINVAL), 1.0, mix)
+
+  p1 = geom_priority[g1]
+  p2 = geom_priority[g2]
+  mix = where(p1 == p2, mix, where(p1 > p2, 1.0, 0.0))
+  is_standard = (geom_solref[g1, 0] > 0) and (geom_solref[g2, 0] > 0)
+
+  solref_ = wp.vec(0.0, length=MJ_NREF, dtype=wp.float32)
+  for i in range(MJ_NREF):
+    solref_[i] = mix * geom_solref[g1, i] + (1.0 - mix) * geom_solref[g2, i]
+    solref_[i] = where(
+      is_standard, solref_[i], wp.min(geom_solref[g1, i], geom_solref[g2, i])
+    )
+
+  # solimp_ = wp.zeros(mjNIMP, dtype=float)
+  # for i in range(mjNIMP):
+  #     solimp_[i] = mix * geom_solimp[i + g1 * mjNIMP] + (1 - mix) * geom_solimp[i + g2 * mjNIMP]
+
+  friction_ = wp.vec3(0.0, 0.0, 0.0)  # wp.zeros(3, dtype=float)
+  for i in range(3):
+    friction_[i] = wp.max(geom_friction[g1, i], geom_friction[g2, i])
+
+  friction5 = vec5(friction_[0], friction_[0], friction_[1], friction_[2], friction_[2])
+
+  includemargin[tid] = margin - gap
+  friction[tid] = friction5
+
+  for i in range(2):
+    solref[tid][i] = solref_[i]
+
+  for i in range(MJ_NIMP):
+    solimp[tid][i] = (
+      mix * geom_solimp[g1, i] + (1.0 - mix) * geom_solimp[g2, i]
+    )  # solimp_[i]
+
+
+@wp.kernel
+def group_contacts_by_type_kernel(
+  geom_type: wp.array(dtype=wp.int32),
+  bp_geom_pair: wp.array(dtype=wp.vec2i, ndim=2),
+  bp_geom_pair_count: wp.array(dtype=wp.int32),
+  # outputs
+  type_pair_env_id: wp.array(dtype=wp.int32, ndim=2),
+  type_pair_geom_id: wp.array(dtype=wp.vec2i, ndim=2),
+  type_pair_count: wp.array(dtype=wp.int32),
+):
+  worldid, tid = wp.tid()
+  if tid >= bp_geom_pair_count[worldid]:
+    return
+
+  geoms = bp_geom_pair[worldid, tid]
+  geom1 = geoms[0]
+  geom2 = geoms[1]
+
+  type1 = geom_type[geom1]
+  type2 = geom_type[geom2]
+  group_key = group_key(type1, type2)
+
+  n_type_pair = wp.atomic_add(type_pair_count, group_key, 1)
+  type_pair_env_id[group_key, n_type_pair] = worldid
+  type_pair_geom_id[group_key, n_type_pair] = wp.vec2i(geom1, geom2)
+
+
+def broad_phase(m: Model, d: Data):
   """Broad phase collision detection."""
 
   # Directional vectors for sweep
@@ -273,9 +536,7 @@ def broad_phase(m: Model, d: Data) -> Data:
     kernel=broad_phase_project_boxes_onto_sweep_direction_kernel,
     dim=(d.nworld, m.ngeom),
     inputs=[
-      d.geom_aabb,
-      d.geom_xpos,
-      d.geom_xmat,
+      d.dyn_body_aamm,
       d.data_start,
       d.data_end,
       d.data_indexer,
@@ -290,11 +551,7 @@ def broad_phase(m: Model, d: Data) -> Data:
   if segmented_sort_available:
     # print("Using segmented sort")
     wp.utils.segmented_sort_pairs(
-      d.data_start,
-      d.data_indexer,
-      m.ngeom * d.nworld,
-      d.segment_indices,
-      d.nworld,
+      d.data_start, d.data_indexer, m.ngeom * d.nworld, d.segment_indices, d.nworld
     )
   else:
     # Sort each world's segment separately
@@ -349,7 +606,7 @@ def broad_phase(m: Model, d: Data) -> Data:
   wp.launch(
     kernel=reorder_bounding_boxes_kernel,
     dim=(d.nworld, m.ngeom),
-    inputs=[d.geom_aabb, d.geom_xpos, d.geom_xmat, d.boxes_sorted, d.data_indexer],
+    inputs=[d.dyn_body_aamm, d.boxes_sorted, d.data_indexer],
   )
 
   wp.launch(
@@ -382,7 +639,130 @@ def broad_phase(m: Model, d: Data) -> Data:
       d.broadphase_pairs,
       d.result_count,
       d.boxes_sorted,
+      # filter_parent,
+      m.nexclude,
+      m.body_parentid,
+      m.body_weldid,
+      m.body_contype,
+      m.body_conaffinity,
+      # body_has_plane,
+      m.exclude_signature,
     ],
   )
 
-  return d
+
+###########################################################################################3
+
+
+def init(m: Model, d: Data):
+  # initialize output data
+  wp.launch(
+    kernel=init_kernel,
+    dim=(d.nconmax),
+    inputs=[d.contact],
+  )
+
+
+def broadphase(m: Model, d: Data):
+  # broadphase collision detection
+
+  # generate body AAMMs
+  # generate body pairs
+  # get geom AABBs in global frame
+  # get geom pairs
+
+  # generate body AAMMs
+  wp.launch(
+    kernel=get_dyn_body_aamm,
+    dim=(d.nworld, m.nbody),
+    inputs=[
+      m.body_geomnum,
+      m.body_geomadr,
+      m.geom_margin,
+      d.geom_xpos,
+      m.geom_rbound,
+      d.dyn_body_aamm,
+    ],
+  )
+
+  broad_phase(m, d)
+
+
+def group_contacts_by_type(m: Model, d: Data):
+  # initialize type pair count & group contacts by type
+
+  # Initialize type pair count
+  d.narrowphase_candidate_group_count.zero_()
+
+  wp.launch(
+    group_contacts_by_type_kernel,
+    dim=(d.nworld, d.max_num_overlaps_per_world),
+    inputs=[
+      m.geom_type,
+      d.broadphase_pairs,
+      d.result_count,
+    ],
+    outputs=[
+      d.narrowphase_candidate_worldid,
+      d.narrowphase_candidate_geom,
+      d.narrowphase_candidate_group_count,
+    ],
+  )
+
+  # Initialize the env contact counter
+  d.contact_counter.zero_()
+
+
+def narrowphase(m: Model, d: Data):
+  # we need to figure out how to keep the overhead of this small - not launching anything
+  # for pair types without collisions, as well as updating the launch dimensions.
+
+  # we run the collision functions in increasing condim order to get the grouping
+  # right from the get-go.
+
+  for i in range(len(_COLLISION_FUNCS)):
+    # this will lead to a bunch of unnecessary launches, but we don't want to sync at this point
+    func, group_key = _COLLISION_FUNCS[i]
+    func(m, d, group_key)
+
+
+def get_contact_solver_params(m: Model, d: Data):
+  wp.launch(
+    get_contact_solver_params_kernel,
+    dim=[d.nconmax],
+    inputs=[
+      d.contact.geom,
+      m.geom_priority,
+      m.geom_solmix,
+      m.geom_friction,
+      m.geom_solref,
+      m.geom_solimp,
+      m.geom_margin,
+      m.geom_gap,
+      d.contact_counter,
+    ],
+    outputs=[
+      d.contact.includemargin,
+      d.contact.friction,
+      d.contact.solref,
+      d.contact.solreffriction,
+      d.contact.solimp,
+    ],
+  )
+
+  # TODO(team): do we need condim sorting, deepest penetrating contact here?
+
+
+def collision(m: Model, d: Data):
+  """Collision detection."""
+
+  # AD: based on engine_collision_driver.py in Eric's warp fork/mjx-collisions-dev
+  # which is further based on the CUDA code here:
+  # https://github.com/btaba/mujoco/blob/warp-collisions/mjx/mujoco/mjx/_src/cuda/engine_collision_driver.cu.cc#L458-L583
+
+  init(m, d)
+  broadphase(m, d)
+  # filtering?
+  group_contacts_by_type(m, d)
+  narrowphase(m, d)
+  get_contact_solver_params(m, d)
