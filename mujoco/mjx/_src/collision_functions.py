@@ -17,8 +17,8 @@ import warp as wp
 
 from .types import Model
 from .types import Data
-from .types import Contact
 from .types import GeomType
+from .types import NUM_GEOM_TYPES
 from .math import make_frame
 from .math import matmul_unroll_33
 
@@ -34,24 +34,32 @@ def _gradient_step(
   x: wp.vec3,
 ):
   """Performs a step of gradient descent."""
-  amin = 1e-4  # minimum value for line search factor scaling the gradient
+  amin = 1.0e-4  # minimum value for line search factor scaling the gradient
   amax = 2.0  # maximum value for line search factor scaling the gradient
   nlinesearch = 10  # line search points
-  dh = 1.0e-5
-  x_plus = wp.vec3(x[0] + dh, x[1] + dh, x[2] + dh)
+  dh = 1.0e-2
+  x_plus_x = wp.vec3(x[0] + dh, x[1], x[2])
+  x_plus_y = wp.vec3(x[0], x[1] + dh, x[2])
+  x_plus_z = wp.vec3(x[0], x[1], x[2] + dh)
   cylinder1_pos = _cylinder_frame(x, geom2_pos, geom2_mat, geom1_pos, geom1_mat, geom1_size)
   cylinder2_pos = _cylinder(x, geom2_size)
-  cylinder1_pos_plus = _cylinder_frame(x_plus, geom2_pos, geom2_mat, geom1_pos, geom1_mat, geom1_size)
-  cylinder2_pos_plus = _cylinder(x_plus, geom2_size)
+  cylinder1_pos_plus_x = _cylinder_frame(x_plus_x, geom2_pos, geom2_mat, geom1_pos, geom1_mat, geom1_size)
+  cylinder2_pos_plus_x = _cylinder(x_plus_x, geom2_size)
+  cylinder1_pos_plus_y = _cylinder_frame(x_plus_y, geom2_pos, geom2_mat, geom1_pos, geom1_mat, geom1_size)
+  cylinder2_pos_plus_y = _cylinder(x_plus_y, geom2_size)
+  cylinder1_pos_plus_z = _cylinder_frame(x_plus_z, geom2_pos, geom2_mat, geom1_pos, geom1_mat, geom1_size)
+  cylinder2_pos_plus_z = _cylinder(x_plus_z, geom2_size)
   clearance = cylinder1_pos + cylinder2_pos + wp.abs(wp.max(cylinder1_pos, cylinder2_pos))
-  clearance_plus = cylinder1_pos_plus + cylinder2_pos_plus + wp.abs(wp.max(cylinder1_pos_plus, cylinder2_pos_plus))
-  grad_clearance = (clearance_plus - clearance) / dh
+  clearance_plus_x = cylinder1_pos_plus_x + cylinder2_pos_plus_x + wp.abs(wp.max(cylinder1_pos_plus_x, cylinder2_pos_plus_x))
+  clearance_plus_y = cylinder1_pos_plus_y + cylinder2_pos_plus_y + wp.abs(wp.max(cylinder1_pos_plus_y, cylinder2_pos_plus_y))
+  clearance_plus_z = cylinder1_pos_plus_z + cylinder2_pos_plus_z + wp.abs(wp.max(cylinder1_pos_plus_z, cylinder2_pos_plus_z))
+  grad_clearance = wp.vec3((clearance_plus_x - clearance) / dh, (clearance_plus_y - clearance) / dh, (clearance_plus_z - clearance) / dh)
   ratio = (amax / amin) ** (1.0 / float(nlinesearch - 1))
   value_prev = 1.0e10
   candidate_prev = wp.vec3(0.0)
   for i in range(nlinesearch):
     alpha = amin * (ratio ** float(i))
-    candidate = wp.vec3(x[0] - alpha * grad_clearance, x[1] - alpha * grad_clearance, x[2] - alpha * grad_clearance)
+    candidate = wp.vec3(x[0] - alpha * grad_clearance[0], x[1] - alpha * grad_clearance[1], x[2] - alpha * grad_clearance[2])
     cylinder1_pos = _cylinder_frame(candidate, geom2_pos, geom2_mat, geom1_pos, geom1_mat, geom1_size)
     cylinder2_pos = _cylinder(candidate, geom2_size)
     value = cylinder1_pos + cylinder2_pos + wp.abs(wp.max(cylinder1_pos, cylinder2_pos))
@@ -125,7 +133,8 @@ def _optim(
   cylinder2_pos = _cylinder(pos, geom2_size)
   dist = cylinder1_pos + cylinder2_pos
 
-  dh = 1.0e-5
+
+  dh = 1.0e-2
   pos_plus_x = wp.vec3(pos[0] + dh, pos[1], pos[2])
   pos_plus_y = wp.vec3(pos[0], pos[1] + dh, pos[2])
   pos_plus_z = wp.vec3(pos[0], pos[1], pos[2] + dh)
@@ -163,7 +172,7 @@ def plane_convex_kernel(m: Model, d: Data, group_key: int):
   #  pass # mesh-specific stuff
 
   # if contact
-  index = wp.atomic_add(d.contact_counter, 0, 1)
+  index = wp.atomic_add(d.ncon, 0, 1)
   # d.contact.dist[index] = dist
   # d.contact.pos[index] = pos
   # d.contact.frame[index] = frame
@@ -203,9 +212,8 @@ def cylinder_cylinder_kernel(m: Model, d: Data, group_key: int):
   elif condim == 3:
     x_condim = -r * basis[2]
   x0 = mid + x_condim
-  #x0 = wp.vec3(mid[0] + x_condim[condim], mid[1] + x_condim[condim], mid[2] + x_condim[condim])
   dist, pos, frame = _optim(geom1_pos, geom2_pos, geom1_mat, geom2_mat, geom1_size, geom2_size, x0)
-  index = wp.atomic_add(d.contact_counter, 0, 1)
+  index = wp.atomic_add(d.ncon, 0, 1)
   d.contact.dist[index] = dist
   d.contact.pos[index] = pos
   d.contact.frame[index] = frame
@@ -248,10 +256,6 @@ def hfield_convex(m: Model, d: Data, group_key: int):
   pass
 
 
-def hfield_convex(m: Model, d: Data, group_key: int):
-  pass
-
-
 def sphere_sphere(m: Model, d: Data, group_key: int):
   pass
 
@@ -272,10 +276,6 @@ def sphere_convex(m: Model, d: Data, group_key: int):
   pass
 
 
-def sphere_convex(m: Model, d: Data, group_key: int):
-  pass
-
-
 def capsule_capsule(m: Model, d: Data, group_key: int):
   pass
 
@@ -289,10 +289,6 @@ def capsule_ellipsoid(m: Model, d: Data, group_key: int):
 
 
 def capsule_cylinder(m: Model, d: Data, group_key: int):
-  pass
-
-
-def capsule_convex(m: Model, d: Data, group_key: int):
   pass
 
 
@@ -320,5 +316,51 @@ def convex_convex(m: Model, d: Data, group_key: int):
   pass
 
 
-def convex_convex(m: Model, d: Data, group_key: int):
-  pass
+@wp.func
+def group_key(type1: wp.int32, type2: wp.int32) -> wp.int32:
+  return type1 + type2 * NUM_GEOM_TYPES
+
+
+# same order as in MJX - collision function and group key.
+_COLLISION_FUNCS = [
+  (plane_sphere, group_key(GeomType.PLANE.value, GeomType.SPHERE.value)),
+  (plane_capsule, group_key(GeomType.PLANE.value, GeomType.CAPSULE.value)),
+  (plane_convex, group_key(GeomType.PLANE.value, GeomType.BOX.value)),
+  (plane_ellipsoid, group_key(GeomType.PLANE.value, GeomType.ELLIPSOID.value)),
+  (plane_cylinder, group_key(GeomType.PLANE.value, GeomType.CYLINDER.value)),
+  (plane_convex, group_key(GeomType.PLANE.value, GeomType.MESH.value)),
+  (hfield_sphere, group_key(GeomType.HFIELD.value, GeomType.SPHERE.value)),
+  (hfield_capsule, group_key(GeomType.HFIELD.value, GeomType.CAPSULE.value)),
+  (hfield_convex, group_key(GeomType.HFIELD.value, GeomType.BOX.value)),
+  (hfield_convex, group_key(GeomType.HFIELD.value, GeomType.MESH.value)),
+  (sphere_sphere, group_key(GeomType.SPHERE.value, GeomType.SPHERE.value)),
+  (sphere_capsule, group_key(GeomType.SPHERE.value, GeomType.CAPSULE.value)),
+  (sphere_cylinder, group_key(GeomType.SPHERE.value, GeomType.CYLINDER.value)),
+  (sphere_ellipsoid, group_key(GeomType.SPHERE.value, GeomType.ELLIPSOID.value)),
+  (sphere_convex, group_key(GeomType.SPHERE.value, GeomType.BOX.value)),
+  (sphere_convex, group_key(GeomType.SPHERE.value, GeomType.MESH.value)),
+  (capsule_capsule, group_key(GeomType.CAPSULE.value, GeomType.CAPSULE.value)),
+  (capsule_convex, group_key(GeomType.CAPSULE.value, GeomType.BOX.value)),
+  (capsule_ellipsoid, group_key(GeomType.CAPSULE.value, GeomType.ELLIPSOID.value)),
+  (capsule_cylinder, group_key(GeomType.CAPSULE.value, GeomType.CYLINDER.value)),
+  (capsule_convex, group_key(GeomType.CAPSULE.value, GeomType.MESH.value)),
+  (ellipsoid_ellipsoid, group_key(GeomType.ELLIPSOID.value, GeomType.ELLIPSOID.value)),
+  (ellipsoid_cylinder, group_key(GeomType.ELLIPSOID.value, GeomType.CYLINDER.value)),
+  (cylinder_cylinder, group_key(GeomType.CYLINDER.value, GeomType.CYLINDER.value)),
+  (box_box, group_key(GeomType.BOX.value, GeomType.BOX.value)),
+  (convex_convex, group_key(GeomType.BOX.value, GeomType.MESH.value)),
+  (convex_convex, group_key(GeomType.MESH.value, GeomType.MESH.value)),
+]
+
+
+def narrowphase(m: Model, d: Data):
+  # we need to figure out how to keep the overhead of this small - not launching anything
+  # for pair types without collisions, as well as updating the launch dimensions.
+
+  # we run the collision functions in increasing condim order to get the grouping
+  # right from the get-go.
+
+  for i in range(len(_COLLISION_FUNCS)):
+    # this will lead to a bunch of unnecessary launches, but we don't want to sync at this point
+    func, group_key = _COLLISION_FUNCS[i]
+    func(m, d, group_key)

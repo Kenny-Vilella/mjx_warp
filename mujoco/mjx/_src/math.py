@@ -142,7 +142,7 @@ def make_frame(a: wp.vec3) -> wp.mat33:
   """Makes a right-handed 3D frame given a direction."""
   a = wp.normalize(a)
   b, c = orthogonals(a)
-  return wp.matrix_from_cols(a, b, c)
+  return wp.matrix_from_rows(a, b, c)
 
 
 @wp.func

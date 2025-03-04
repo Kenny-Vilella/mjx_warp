@@ -233,6 +233,10 @@ class Model:
   body_inertia: wp.array(dtype=wp.vec3, ndim=1)
   body_mass: wp.array(dtype=wp.float32, ndim=1)
   body_invweight0: wp.array(dtype=wp.float32, ndim=2)
+  body_geomnum: wp.array(dtype=wp.int32, ndim=1)
+  body_geomadr: wp.array(dtype=wp.int32, ndim=1)
+  body_contype: wp.array(dtype=wp.int32, ndim=1)
+  body_conaffinity: wp.array(dtype=wp.int32, ndim=1)
   jnt_bodyid: wp.array(dtype=wp.int32, ndim=1)
   jnt_limited: wp.array(dtype=wp.int32, ndim=1)
   jnt_limited_slide_hinge_adr: wp.array(dtype=wp.int32, ndim=1)  # warp only
@@ -260,6 +264,8 @@ class Model:
   geom_margin: wp.array(dtype=wp.float32, ndim=1)
   geom_size: wp.array(dtype=wp.vec3, ndim=1)
   geom_gap: wp.array(dtype=wp.float32, ndim=1)
+  geom_rbound: wp.array(dtype=wp.float32, ndim=2)
+  geom_aabb: wp.array(dtype=wp.vec3, ndim=2)
   site_pos: wp.array(dtype=wp.vec3, ndim=1)
   site_quat: wp.array(dtype=wp.quat, ndim=1)
   site_bodyid: wp.array(dtype=wp.int32, ndim=1)
@@ -286,16 +292,6 @@ class Model:
   actuator_actadr: wp.array(dtype=wp.int32, ndim=1)
   actuator_dyntype: wp.array(dtype=wp.int32, ndim=1)
   actuator_dynprm: wp.array(dtype=vec10f, ndim=1)
-
-  geom_margin: wp.array(dtype=wp.float32, ndim=1)
-  body_geomnum: wp.array(dtype=wp.int32, ndim=1)
-  body_geomadr: wp.array(dtype=wp.int32, ndim=1)
-  geom_rbound: wp.array(dtype=wp.float32, ndim=2)
-
-  body_parentid: wp.array(dtype=wp.int32, ndim=1)
-  body_weldid: wp.array(dtype=wp.int32, ndim=1)
-  body_contype: wp.array(dtype=wp.int32, ndim=1)
-  body_conaffinity: wp.array(dtype=wp.int32, ndim=1)
   exclude_signature: wp.array(dtype=wp.int32, ndim=1)
 
 
@@ -318,7 +314,6 @@ class Contact:
 @wp.struct
 class Data:
   nworld: int
-  ncon_total: wp.array(dtype=wp.int32, ndim=1)  # warp only
   nefc_total: wp.array(dtype=wp.int32, ndim=1)  # warp only
   nconmax: int
   njmax: int
@@ -327,7 +322,7 @@ class Data:
   qvel: wp.array(dtype=wp.float32, ndim=2)
   qacc_warmstart: wp.array(dtype=wp.float32, ndim=2)
   qfrc_applied: wp.array(dtype=wp.float32, ndim=2)
-  ncon: int
+  ncon: wp.array(dtype=wp.int32, ndim=1)
   nl: int
   nefc: wp.array(dtype=wp.int32, ndim=1)
   ctrl: wp.array(dtype=wp.float32, ndim=2)
@@ -379,7 +374,6 @@ class Data:
   efc_worldid: wp.array(dtype=wp.int32, ndim=1)  # warp only
   xfrc_applied: wp.array(dtype=wp.spatial_vector, ndim=2)
   contact: Contact
-  contact_counter: wp.array(dtype=wp.int32, ndim=1)
 
   # temp arrays
   qfrc_integration: wp.array(dtype=wp.float32, ndim=2)
@@ -400,7 +394,7 @@ class Data:
   ranges: wp.array(dtype=wp.int32, ndim=2)
   cumulative_sum: wp.array(dtype=wp.int32, ndim=1)
   segment_indices: wp.array(dtype=wp.int32, ndim=1)
-  dyn_body_aamm: wp.array(dtype=wp.vec3, ndim=3)
+  dyn_geom_aabb: wp.array(dtype=wp.vec3, ndim=3)
 
   # narrowphase temp arrays
   narrowphase_candidate_worldid: wp.array(dtype=wp.int32, ndim=2)
