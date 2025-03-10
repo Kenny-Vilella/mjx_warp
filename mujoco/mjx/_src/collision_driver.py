@@ -559,7 +559,7 @@ def collision(m: Model, d: Data):
   # filtering?
   group_contacts_by_type(m, d)
   # XXX switch between collision functions and GJK/EPA here
-  if True:
+  if False:
     from .collision_functions import narrowphase
   else:
     from .collision_convex import narrowphase
