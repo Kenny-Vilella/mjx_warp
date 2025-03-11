@@ -44,10 +44,6 @@ wp.config.enable_backward = False
 FLOAT_MIN = -1e30
 FLOAT_MAX = 1e30
 
-kGjkMultiContactCount = 4
-kMaxEpaBestCount = 12
-kMaxMultiPolygonCount = 8
-
 
 @wp.func
 def gjk_support_plane(
@@ -178,6 +174,15 @@ def gjk_support_convex(
   return wp.dot(support_pt, dir), support_pt
 
 
+# This is a temporary workaround, compilation fail if we do not have a default function
+@wp.func
+def gjk_support_default(
+  info: float,
+  dir: wp.vec3,
+  convex_vert: wp.array(dtype=wp.vec3),
+):
+  return 0.0, wp.vec3(0.0)
+
 support_functions = {
   GeomType.PLANE.value: gjk_support_plane,
   GeomType.SPHERE.value: gjk_support_sphere,
@@ -186,13 +191,10 @@ support_functions = {
   GeomType.ELLIPSOID.value: gjk_support_ellipsoid,
   GeomType.CYLINDER.value: gjk_support_cylinder,
   GeomType.MESH.value: gjk_support_convex,
-  Any: None,
 }
 
 
-
-
-def gjk_support(type1, type2):
+def create_gjk_support_function(type1, type2):
   @wp.func
   def _gjk_support(
     info1: Any,
@@ -204,39 +206,41 @@ def gjk_support(type1, type2):
     # Negative distance means objects are not intersecting along direction `dir`.
     # Positive distance means objects are intersecting along the given direction `dir`.
 
-    if wp.static(type1 == GeomType.SPHERE.value):
-      dist1, s1 = gjk_support_sphere(info1, dir, convex_vert)
-    elif wp.static(type1 == GeomType.BOX.value):
-      dist1, s1 = gjk_support_box(info1, dir, convex_vert)
-    elif wp.static(type1 == GeomType.PLANE.value):
-      dist1, s1 = gjk_support_plane(info1, dir, convex_vert)
-    elif wp.static(type1 == GeomType.CAPSULE.value):
-      dist1, s1 = gjk_support_capsule(info1, dir, convex_vert)
-    elif wp.static(type1 == GeomType.ELLIPSOID.value):
-      dist1, s1 = gjk_support_ellipsoid(info1, dir, convex_vert)
-    elif wp.static(type1 == GeomType.CYLINDER.value):
-      dist1, s1 = gjk_support_cylinder(info1, dir, convex_vert)
-    elif wp.static(type1 == GeomType.MESH.value):
-      dist1, s1 = gjk_support_convex(info1, dir, convex_vert)
-    else:
-      dist1, s1 = 0.0, wp.vec3(0.0)
+    dist1, s1 = wp.static(support_functions.get(type1, gjk_support_default))(info1, dir, convex_vert)
+    # if wp.static(type1 == GeomType.SPHERE.value):
+    #   dist1, s1 = gjk_support_sphere(info1, dir, convex_vert)
+    # elif wp.static(type1 == GeomType.BOX.value):
+    #   dist1, s1 = gjk_support_box(info1, dir, convex_vert)
+    # elif wp.static(type1 == GeomType.PLANE.value):
+    #   dist1, s1 = gjk_support_plane(info1, dir, convex_vert)
+    # elif wp.static(type1 == GeomType.CAPSULE.value):
+    #   dist1, s1 = gjk_support_capsule(info1, dir, convex_vert)
+    # elif wp.static(type1 == GeomType.ELLIPSOID.value):
+    #   dist1, s1 = gjk_support_ellipsoid(info1, dir, convex_vert)
+    # elif wp.static(type1 == GeomType.CYLINDER.value):
+    #   dist1, s1 = gjk_support_cylinder(info1, dir, convex_vert)
+    # elif wp.static(type1 == GeomType.MESH.value):
+    #   dist1, s1 = gjk_support_convex(info1, dir, convex_vert)
+    # else:
+    #   dist1, s1 = 0.0, wp.vec3(0.0)
 
-    if wp.static(type2 == GeomType.SPHERE.value):
-      dist2, s2 = gjk_support_sphere(info2, -dir, convex_vert)
-    elif wp.static(type2 == GeomType.BOX.value):
-      dist2, s2 = gjk_support_box(info2, -dir, convex_vert)
-    elif wp.static(type2 == GeomType.PLANE.value):
-      dist2, s2 = gjk_support_plane(info2, -dir, convex_vert)
-    elif wp.static(type2 == GeomType.CAPSULE.value):
-      dist2, s2 = gjk_support_capsule(info2, -dir, convex_vert)
-    elif wp.static(type2 == GeomType.ELLIPSOID.value):
-      dist2, s2 = gjk_support_ellipsoid(info2, -dir, convex_vert)
-    elif wp.static(type2 == GeomType.CYLINDER.value):
-      dist2, s2 = gjk_support_cylinder(info2, -dir, convex_vert)
-    elif wp.static(type2 == GeomType.MESH.value):
-      dist2, s2 = gjk_support_convex(info2, -dir, convex_vert)
-    else:
-      dist2, s2 = 0.0, wp.vec3(0.0)
+    dist2, s2 = wp.static(support_functions.get(type2, gjk_support_default))(info2, -dir, convex_vert)
+    # if wp.static(type2 == GeomType.SPHERE.value):
+    #   dist2, s2 = gjk_support_sphere(info2, -dir, convex_vert)
+    # elif wp.static(type2 == GeomType.BOX.value):
+    #   dist2, s2 = gjk_support_box(info2, -dir, convex_vert)
+    # elif wp.static(type2 == GeomType.PLANE.value):
+    #   dist2, s2 = gjk_support_plane(info2, -dir, convex_vert)
+    # elif wp.static(type2 == GeomType.CAPSULE.value):
+    #   dist2, s2 = gjk_support_capsule(info2, -dir, convex_vert)
+    # elif wp.static(type2 == GeomType.ELLIPSOID.value):
+    #   dist2, s2 = gjk_support_ellipsoid(info2, -dir, convex_vert)
+    # elif wp.static(type2 == GeomType.CYLINDER.value):
+    #   dist2, s2 = gjk_support_cylinder(info2, -dir, convex_vert)
+    # elif wp.static(type2 == GeomType.MESH.value):
+    #   dist2, s2 = gjk_support_convex(info2, -dir, convex_vert)
+    # else:
+    #   dist2, s2 = 0.0, wp.vec3(0.0)
 
     support_pt = s1 - s2
     return dist1 + dist2, support_pt
@@ -335,25 +339,11 @@ def get_info(t):
         mesh.vertnum = 0
       return mesh
     else:
-      sphere = GeomSphere()
-      sphere.pos = pos
-      sphere.rot = rot
-      sphere.radius = size[0]
-      return sphere
+      # This is a temporary workaround, compilation fail if we return nothing
+      return wp.nan
       #wp.static(RuntimeError("Unsupported type", t))
 
   return _get_info
-
-class GjkEpaPipeline:
-  def __init__(
-    self,
-    type1,
-    type2,
-    gjk_epa_sparse: wp.Kernel,
-  ):
-    self.type1 = type1
-    self.type2 = type2
-    self.gjk_epa_sparse = gjk_epa_sparse
 
 
 def gjk_epa_pipeline(
@@ -361,13 +351,14 @@ def gjk_epa_pipeline(
   type2: int,
   gjk_iteration_count: int,
   epa_iteration_count: int,
-  max_epa_best_count: int = kMaxEpaBestCount,
-  epa_exact_neg_distance: bool = True,
-  kMaxMultiPolygonCount: int = kMaxMultiPolygonCount,
-  kGjkMultiContactCount: int = kGjkMultiContactCount,
-) -> GjkEpaPipeline:
-  # type1 = int(type1)
-  # type2 = int(type2)
+  epa_best_count: int,
+  epa_exact_neg_distance: bool,
+  depth_extension: float,
+  multi_polygon_count: int,
+  multi_contact_count: int,
+  multi_tilt_angle: float,
+):
+  key = group_key(type1, type2)
 
   # Calculates whether two objects intersect.
   # Returns simplex and normal.
@@ -386,10 +377,10 @@ def gjk_epa_pipeline(
     dir_n = -dir
     depth = 1e30
 
-    dist_max, simplex0 = wp.static(gjk_support(type1, type2))(
+    dist_max, simplex0 = wp.static(create_gjk_support_function(type1, type2))(
       info1, info2, dir, m.mesh_vert
     )
-    dist_min, simplex1 = wp.static(gjk_support(type1, type2))(
+    dist_min, simplex1 = wp.static(create_gjk_support_function(type1, type2))(
       info1, info2, dir_n, m.mesh_vert
     )
     if dist_max < dist_min:
@@ -403,7 +394,7 @@ def gjk_epa_pipeline(
     sd = simplex0 - simplex1
     dir = orthonormal(sd)
 
-    dist_max, simplex3 = wp.static(gjk_support(type1, type2))(
+    dist_max, simplex3 = wp.static(create_gjk_support_function(type1, type2))(
       info1, info2, dir, m.mesh_vert
     )
     # Initialize a 2-simplex with simplex[2]==simplex[1]. This ensures the
@@ -462,7 +453,7 @@ def gjk_epa_pipeline(
         break
 
       # Add new support point to the simplex.
-      dist, simplex_i = wp.static(gjk_support(type1, type2))(
+      dist, simplex_i = wp.static(create_gjk_support_function(type1, type2))(
         info1, info2, plane[index], m.mesh_vert
       )
       simplex[index] = simplex_i
@@ -482,14 +473,14 @@ def gjk_epa_pipeline(
     return simplex, normal
 
 
-  matc3 = wp.types.matrix(shape=(max_epa_best_count, 3), dtype=float)
-  vecc3 = wp.types.vector(max_epa_best_count * 3, dtype=float)
+  matc3 = wp.types.matrix(shape=(epa_best_count, 3), dtype=float)
+  vecc3 = wp.types.vector(epa_best_count * 3, dtype=float)
 
   # Matrix definition for the `tris` scratch space which is used to store the
   # triangles of the polytope. Note that the first dimension is 2, as we need
   # to store the previous and current polytope. But since Warp doesn't support
-  # 3D matrices yet, we use 2 * 3 * max_epa_best_count as the first dimension.
-  tris_dim = 3 * max_epa_best_count
+  # 3D matrices yet, we use 2 * 3 * epa_best_count as the first dimension.
+  tris_dim = 3 * epa_best_count
   mat2c3 = wp.types.matrix(shape=(2 * tris_dim, 3), dtype=float)
 
   # computes contact normal and depth
@@ -500,7 +491,6 @@ def gjk_epa_pipeline(
     d:Data,
     g1: int,
     g2: int,
-    depth_extension: float,
     epa_best_count: int,
     simplex: mat43,
     input_normal: wp.vec3,
@@ -511,7 +501,7 @@ def gjk_epa_pipeline(
     normal = input_normal
 
     # Get the support. If less than 0, objects are not intersecting.
-    depth, _simplex = wp.static(gjk_support(type1, type2))(
+    depth, _simplex = wp.static(create_gjk_support_function(type1, type2))(
       info1, info2, normal, m.mesh_vert
     )
 
@@ -543,7 +533,7 @@ def gjk_epa_pipeline(
           p0 = wp.clamp(alpha, 0.0, 1.0) * v - si1
           p0, pf = gjk_normalize(p0)
           if pf:
-            depth2, _ = wp.static(gjk_support(type1, type2))(
+            depth2, _ = wp.static(create_gjk_support_function(type1, type2))(
               info1, info2, p0, m.mesh_vert
             )
             if depth2 < depth:
@@ -586,7 +576,7 @@ def gjk_epa_pipeline(
             dists[i * 3 + j] = 2e30
           continue
 
-        dist, pi = wp.static(gjk_support(type1, type2))(info1, info2, n, m.mesh_vert)
+        dist, pi = wp.static(create_gjk_support_function(type1, type2))(info1, info2, n, m.mesh_vert)
         p[i] = pi
         if dist < depth:
           depth = dist
@@ -602,7 +592,7 @@ def gjk_epa_pipeline(
               p0 = wp.clamp(alpha, 0.0, 1.0) * v - p[i]
               p0, pf = gjk_normalize(p0)
               if pf:
-                dist2, v = wp.static(gjk_support(type1, type2))(
+                dist2, v = wp.static(create_gjk_support_function(type1, type2))(
                   info1, info2, p0, m.mesh_vert
                 )
                 if dist2 < depth:
@@ -646,7 +636,7 @@ def gjk_epa_pipeline(
         tris[tris_dim + j * 3 + 1] = tris[parentIndex * 3 + ((childIndex + 1) % 3)]
         tris[tris_dim + j * 3 + 2] = p[parentIndex]
 
-      for r in range(max_epa_best_count * 3):
+      for r in range(epa_best_count * 3):
         # swap triangles
         swap = tris[tris_dim + r]
         tris[tris_dim + r] = tris[r]
@@ -655,10 +645,10 @@ def gjk_epa_pipeline(
     return depth, normal
 
 
-  mat3p = wp.types.matrix(shape=(kMaxMultiPolygonCount, 3), dtype=float)
+  mat3p = wp.types.matrix(shape=(multi_polygon_count, 3), dtype=float)
 
   # allocate maximum number of contact points
-  mat3c = wp.types.matrix(shape=(kGjkMultiContactCount, 3), dtype=float)
+  mat3c = wp.types.matrix(shape=(multi_contact_count, 3), dtype=float)
 
   @wp.func
   def _get_multiple_contacts(
@@ -667,9 +657,6 @@ def gjk_epa_pipeline(
     d: Data,
     g1: int,
     g2: int,
-    depth_extension: float,
-    multi_polygon_count: int,
-    multi_tilt_angle: float,
     depth: float,
     normal: wp.vec3,
   ):
@@ -738,44 +725,13 @@ def gjk_epa_pipeline(
         mat8 * normal[0] + mat9 * normal[1] + mat10 * normal[2],
       )
 
-      if wp.static(type1 == GeomType.SPHERE.value):
-        _, p = gjk_support_sphere(info1, n, m.mesh_vert)
-      elif wp.static(type1 == GeomType.BOX.value):
-        _, p = gjk_support_box(info1, n, m.mesh_vert)
-      elif wp.static(type1 == GeomType.PLANE.value):
-        _, p = gjk_support_plane(info1, n, m.mesh_vert)
-      elif wp.static(type1 == GeomType.CAPSULE.value):
-        _, p = gjk_support_capsule(info1, n, m.mesh_vert)
-      elif wp.static(type1 == GeomType.ELLIPSOID.value):
-        _, p = gjk_support_ellipsoid(info1, n, m.mesh_vert)
-      elif wp.static(type1 == GeomType.CYLINDER.value):
-        _, p = gjk_support_cylinder(info1, n, m.mesh_vert)
-      elif wp.static(type1 == GeomType.MESH.value):
-        _, p = gjk_support_convex(info1, n, m.mesh_vert)
-      else:
-        _, p = 0.0, wp.vec3(0.0)
-
+      _, p = wp.static(support_functions.get(type1, gjk_support_default))(info1, n, m.mesh_vert)
       v1[v1count] = wp.vec3(wp.dot(p, dir), wp.dot(p, dir2), wp.dot(p, normal))
       if i != 0 or any_different(v1[v1count], v1[v1count - 1]):
         v1count += 1
 
       n = -n
-      if wp.static(type2 == GeomType.SPHERE.value):
-        _, p = gjk_support_sphere(info2, n, m.mesh_vert)
-      elif wp.static(type2 == GeomType.BOX.value):
-        _, p = gjk_support_box(info2, n, m.mesh_vert)
-      elif wp.static(type2 == GeomType.PLANE.value):
-        _, p = gjk_support_plane(info2, n, m.mesh_vert)
-      elif wp.static(type2 == GeomType.CAPSULE.value):
-        _, p = gjk_support_capsule(info2, n, m.mesh_vert)
-      elif wp.static(type2 == GeomType.ELLIPSOID.value):
-        _, p = gjk_support_ellipsoid(info2, n, m.mesh_vert)
-      elif wp.static(type2 == GeomType.CYLINDER.value):
-        _, p = gjk_support_cylinder(info2, n, m.mesh_vert)
-      elif wp.static(type2 == GeomType.MESH.value):
-        _, p = gjk_support_convex(info2, n, m.mesh_vert)
-      else:
-        _, p = 0.0, wp.vec3(0.0)
+      _, p = wp.static(support_functions.get(type2, gjk_support_default))(info2, n, m.mesh_vert)
       v2[v2count] = wp.vec3(wp.dot(p, dir), wp.dot(p, dir2), wp.dot(p, normal))
       if i != 0 or any_different(v2[v2count], v2[v2count - 1]):
         v2count += 1
@@ -893,7 +849,7 @@ def gjk_epa_pipeline(
       # from MJX. Deduplicate the points properly.
       last_pt = wp.vec3(FLOAT_MAX, FLOAT_MAX, FLOAT_MAX)
 
-      for k in range(wp.static(kGjkMultiContactCount)):
+      for k in range(wp.static(multi_contact_count)):
         pt = out[k, 0] * dir + out[k, 1] * dir2 + out[k, 2] * normal
         # Skip contact points that are too close.
         if wp.length(pt - last_pt) <= 1e-6:
@@ -974,7 +930,7 @@ def gjk_epa_pipeline(
               w = (m1 + (1.0 - alpha) * m2 + alpha * m2b) * 0.5
               var_rx = w[0] * dir + w[1] * dir2 + w[2] * normal
 
-      for k in range(wp.static(kGjkMultiContactCount)):
+      for k in range(wp.static(multi_contact_count)):
         contact_points[k] = var_rx
 
       contact_count = 1
@@ -987,11 +943,6 @@ def gjk_epa_pipeline(
   def gjk_epa_sparse(
     m: Model,
     d: Data,
-    key: int,
-    epa_best_count: int,
-    depth_extension: float,
-    multi_polygon_count: int,
-    multi_tilt_angle: float,
   ):
     tid = wp.tid()
 
@@ -1026,7 +977,6 @@ def gjk_epa_pipeline(
       d,
       g1,
       g2,
-      depth_extension,
       epa_best_count,
       simplex,
       normal,
@@ -1043,9 +993,6 @@ def gjk_epa_pipeline(
       d,
       g1,
       g2,
-      depth_extension,
-      multi_polygon_count,
-      multi_tilt_angle,
       depth,
       normal,
     )
@@ -1059,99 +1006,37 @@ def gjk_epa_pipeline(
       d.contact.frame[cid + i] = make_frame(normal)
       d.contact.pos[cid + i] = points[i]
 
-  return GjkEpaPipeline(
-    type1,
-    type2,
-    gjk_epa_sparse,
-  )
+  return gjk_epa_sparse
 
+_collision_kernels = {}
 
-def _narrowphase(
-  m: Model,
-  d: Data,
-  type1: int,
-  type2: int,
-  gjk_iteration_count: int,
-  epa_iteration_count: int,
-  epa_best_count: int,
-  depth_extension: float,
-  multi_polygon_count: int,
-  multi_tilt_angle: float,
-):
-  key = group_key(type1, type2)
-
-  pipeline = gjk_epa_pipeline(
-    type1,
-    type2,
-    gjk_iteration_count,
-    epa_iteration_count,
-  )
-  wp.launch(
-    pipeline.gjk_epa_sparse,
-    dim=d.nconmax,
-    inputs=[
-      m,
-      d,
-      key,
-      epa_best_count,
-      depth_extension,
-      multi_polygon_count,
-      multi_tilt_angle,
-    ],
-    device=d.geom_xpos.device,
-    # block_dim=blockSize,
-  )
-
-
-def narrowphase_launch(
-  m: Model,
-  d: Data,
-  gjk_iteration_count: int,
-  epa_iteration_count: int,
-  epa_best_count: int,
-  depth_extension: float,
-  multi_polygon_count: int,
-  multi_tilt_angle: float,
-):
-  """
-  Perform the narrowphase collision detection based on geometry types.
-
-  Args:
-      s: CUDA stream.
-      input (CollisionInput): Input collision data.
-      output (CollisionOutput): Output collision data.
-  """
-
-  for t2 in range(NUM_GEOM_TYPES):
-    for t1 in range(t2 + 1):
-      _narrowphase(
-        m,
-        d,
-        t1,
-        t2,
-        gjk_iteration_count,
-        epa_iteration_count,
-        epa_best_count,
-        depth_extension,
-        multi_polygon_count,
-        multi_tilt_angle,
-      )
 
 def narrowphase(m: Model, d: Data):
   gjk_iteration_count = 1
   epa_iteration_count = 12
   epa_best_count = 12
+  epa_exact_neg_distance = True
+  multi_contact_count = 4
   multi_polygon_count = 8
   depth_extension = 0.1
   multi_tilt_angle = 1.0
 
-  narrowphase_launch(
-    m,
-    d,
-    gjk_iteration_count,
-    epa_iteration_count,
-    epa_best_count,
-    depth_extension,
-    multi_polygon_count,
-    multi_tilt_angle,
-  )
+  if len(_collision_kernels) == 0:
+    for t2 in range(NUM_GEOM_TYPES):
+      for t1 in range(t2 + 1):
+        _collision_kernels[(t1, t2)] = gjk_epa_pipeline(
+          t1,
+          t2,
+          gjk_iteration_count,
+          epa_iteration_count,
+          epa_best_count,
+          epa_exact_neg_distance,
+          depth_extension,
+          multi_polygon_count,
+          multi_contact_count,
+          multi_tilt_angle,
+        )
+
+  for collision_kernel in _collision_kernels.values():
+    wp.launch(collision_kernel, dim=d.nconmax, inputs=[m, d])
+
