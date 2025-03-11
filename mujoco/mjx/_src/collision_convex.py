@@ -26,6 +26,7 @@ from .support import all_same
 from .support import any_different
 from .support import group_key
 from .math import make_frame
+from .collision_functions import get_info
 from .collision_functions import GeomPlane
 from .collision_functions import GeomSphere
 from .collision_functions import GeomCapsule
@@ -173,15 +174,6 @@ def gjk_support_convex(
   return wp.dot(support_pt, dir), support_pt
 
 
-# This is a temporary workaround, compilation fail if we do not have a default function
-@wp.func
-def gjk_support_default(
-  info: float,
-  dir: wp.vec3,
-  convex_vert: wp.array(dtype=wp.vec3),
-):
-  return 0.0, wp.vec3(0.0)
-
 support_functions = {
   GeomType.PLANE.value: gjk_support_plane,
   GeomType.SPHERE.value: gjk_support_sphere,
@@ -205,8 +197,8 @@ def create_gjk_support_function(type1, type2):
     # Negative distance means objects are not intersecting along direction `dir`.
     # Positive distance means objects are intersecting along the given direction `dir`.
 
-    dist1, s1 = wp.static(support_functions.get(type1, gjk_support_default))(info1, dir, convex_vert)
-    dist2, s2 = wp.static(support_functions.get(type2, gjk_support_default))(info2, -dir, convex_vert)
+    dist1, s1 = wp.static(support_functions[type1])(info1, dir, convex_vert)
+    dist2, s2 = wp.static(support_functions[type2])(info2, -dir, convex_vert)
 
     support_pt = s1 - s2
     return dist1 + dist2, support_pt
@@ -242,74 +234,6 @@ def orthonormal(normal: wp.vec3) -> wp.vec3:
 
 
 mat43 = wp.types.matrix(shape=(4, 3), dtype=float)
-
-def get_info(t):
-  @wp.func
-  def _get_info(
-    gid: int,
-    m: Model,
-    geom_xpos: wp.array(dtype=wp.vec3),
-    geom_xmat: wp.array(dtype=wp.mat33),
-  ):
-    pos = geom_xpos[gid]
-    rot = geom_xmat[gid]
-    size = m.geom_size[gid]
-    if wp.static(t == GeomType.SPHERE.value):
-      sphere = GeomSphere()
-      sphere.pos = pos
-      sphere.rot = rot
-      sphere.radius = size[0]
-      return sphere
-    elif wp.static(t == GeomType.BOX.value):
-      box = GeomBox()
-      box.pos = pos
-      box.rot = rot
-      box.size = size
-      return box
-    elif wp.static(t == GeomType.PLANE.value):
-      plane = GeomPlane()
-      plane.pos = pos
-      plane.rot = rot
-      plane.normal = wp.vec3(rot[0, 2], rot[1, 2], rot[2, 2])
-      return plane
-    elif wp.static(t == GeomType.CAPSULE.value):
-      capsule = GeomCapsule()
-      capsule.pos = pos
-      capsule.rot = rot
-      capsule.radius = size[0]
-      capsule.halfsize = size[1]
-      return capsule
-    elif wp.static(t == GeomType.ELLIPSOID.value):
-      ellipsoid = GeomEllipsoid()
-      ellipsoid.pos = pos
-      ellipsoid.rot = rot
-      ellipsoid.size = size
-      return ellipsoid
-    elif wp.static(t == GeomType.CYLINDER.value):
-      cylinder = GeomCylinder()
-      cylinder.pos = pos
-      cylinder.rot = rot
-      cylinder.radius = size[0]
-      cylinder.halfsize = size[1]
-      return cylinder
-    elif wp.static(t == GeomType.MESH.value):
-      mesh = GeomMesh()
-      mesh.pos = pos
-      mesh.rot = rot
-      dataid = m.geom_dataid[gid]
-      if dataid >= 0:
-        mesh.vertadr = m.mesh_vertadr[dataid]
-        mesh.vertnum = m.mesh_vertnum[dataid]
-      else:
-        mesh.vertadr = 0
-        mesh.vertnum = 0
-      return mesh
-    else:
-      # This is a temporary workaround, compilation fail if we return nothing
-      return wp.nan
-      #wp.static(RuntimeError("Unsupported type", t))
-
-  return _get_info
 
 
 def gjk_epa_pipeline(
@@ -691,13 +615,13 @@ def gjk_epa_pipeline(
         mat8 * normal[0] + mat9 * normal[1] + mat10 * normal[2],
       )
 
-      _, p = wp.static(support_functions.get(type1, gjk_support_default))(info1, n, m.mesh_vert)
+      _, p = wp.static(support_functions[type1])(info1, n, m.mesh_vert)
       v1[v1count] = wp.vec3(wp.dot(p, dir), wp.dot(p, dir2), wp.dot(p, normal))
       if i != 0 or any_different(v1[v1count], v1[v1count - 1]):
         v1count += 1
 
       n = -n
-      _, p = wp.static(support_functions.get(type2, gjk_support_default))(info2, n, m.mesh_vert)
+      _, p = wp.static(support_functions[type2])(info2, n, m.mesh_vert)
       v2[v2count] = wp.vec3(wp.dot(p, dir), wp.dot(p, dir2), wp.dot(p, normal))
       if i != 0 or any_different(v2[v2count], v2[v2count - 1]):
         v2count += 1
@@ -990,18 +914,19 @@ def narrowphase(m: Model, d: Data):
   if len(_collision_kernels) == 0:
     for t2 in range(NUM_GEOM_TYPES):
       for t1 in range(t2 + 1):
-        _collision_kernels[(t1, t2)] = gjk_epa_pipeline(
-          t1,
-          t2,
-          gjk_iteration_count,
-          epa_iteration_count,
-          epa_best_count,
-          epa_exact_neg_distance,
-          depth_extension,
-          multi_polygon_count,
-          multi_contact_count,
-          multi_tilt_angle,
-        )
+        if t1 in support_functions and t2 in support_functions:
+          _collision_kernels[(t1, t2)] = gjk_epa_pipeline(
+            t1,
+            t2,
+            gjk_iteration_count,
+            epa_iteration_count,
+            epa_best_count,
+            epa_exact_neg_distance,
+            depth_extension,
+            multi_polygon_count,
+            multi_contact_count,
+            multi_tilt_angle,
+          )
 
   for collision_kernel in _collision_kernels.values():
     wp.launch(collision_kernel, dim=d.nconmax, inputs=[m, d])
