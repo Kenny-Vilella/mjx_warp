@@ -22,7 +22,6 @@ from .math import make_frame
 from .math import closest_segment_to_segment_points
 from .math import normalize_with_norm
 from .support import group_key
-from .support import mat33_from_cols
 
 
 @wp.struct
@@ -279,7 +278,8 @@ def plane_capsule(
     else:
       b = wp.vec3(0.0, 0.0, 1.0)
 
-  frame = mat33_from_cols(n, b, wp.cross(n, b))
+  c = wp.cross(n, b)
+  frame = wp.mat33(n[0], n[1], n[2], b[0], b[1], b[2], c[0], c[1], c[2])
   segment = axis * cap.halfsize
 
   dist1, pos1 = _plane_sphere(n, plane.pos, cap.pos + segment, cap.radius)
@@ -289,10 +289,48 @@ def plane_capsule(
   write_contact(d, dist2, pos2, frame, margin, geom_indices, worldid)
 
 
+@wp.func
+def plane_box(
+  plane: GeomPlane,
+  box: GeomBox,
+  worldid: int,
+  d: Data,
+  margin: float,
+  geom_indices: wp.vec2i,
+):
+  count = int(0)
+  corner = wp.vec3()
+  dist = wp.dot(box.pos - plane.pos, plane.normal)
+
+  # test all corners, pick bottom 4
+  for i in range(8):
+    # get corner in local coordinates
+    corner.x = wp.select(i & 1, -box.size.x, box.size.x)
+    corner.y = wp.select(i & 2, -box.size.y, box.size.y)
+    corner.z = wp.select(i & 4, -box.size.z, box.size.z)
+
+    # get corner in global coordinates relative to box center
+    corner = box.rot * corner
+
+    # compute distance to plane, skip if too far or pointing up
+    ldist = wp.dot(plane.normal, corner)
+    if dist + ldist > margin or ldist > 0:
+      continue
+
+    cdist = dist + ldist
+    frame = make_frame(plane.normal)
+    pos = corner + box.pos + (plane.normal * cdist / -2.0)
+    write_contact(d, cdist, pos, frame, margin, geom_indices, worldid)
+    count += 1
+    if count >= 4:
+      break
+
+
 _collision_functions = {
   (GeomType.PLANE.value, GeomType.SPHERE.value): plane_sphere,
   (GeomType.SPHERE.value, GeomType.SPHERE.value): sphere_sphere,
   (GeomType.PLANE.value, GeomType.CAPSULE.value): plane_capsule,
+  (GeomType.PLANE.value, GeomType.BOX.value): plane_box,
   (GeomType.CAPSULE.value, GeomType.CAPSULE.value): capsule_capsule,
 }
 
