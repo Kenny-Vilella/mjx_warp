@@ -349,16 +349,10 @@ class GjkEpaPipeline:
     self,
     type1,
     type2,
-    gjk_dense: wp.Kernel,
-    epa_dense: wp.Kernel,
-    multiple_contacts_dense: wp.Kernel,
     gjk_epa_sparse: wp.Kernel,
   ):
     self.type1 = type1
     self.type2 = type2
-    self.gjk_dense = gjk_dense
-    self.epa_dense = epa_dense
-    self.multiple_contacts_dense = multiple_contacts_dense
     self.gjk_epa_sparse = gjk_epa_sparse
 
 
@@ -408,7 +402,6 @@ def gjk_epa_pipeline(
     # sd = wp.normalize(simplex0 - simplex1)
     sd = simplex0 - simplex1
     dir = orthonormal(sd)
-    # wp.printf("dir = orthonormal(sd): %f %f %f\n", dir[0], dir[1], dir[2])
 
     dist_max, simplex3 = wp.static(gjk_support(type1, type2))(
       info1, info2, dir, m.mesh_vert
@@ -431,7 +424,6 @@ def gjk_epa_pipeline(
 
     plane = mat43()
     for _it in range(gjk_iteration_count):
-      # wp.printf("  GJK iteration %d\n", _it)
       # Winding orders: plane[0] ccw, plane[1] cw, plane[2] ccw, plane[3] cw.
       plane[0] = wp.cross(simplex[3] - simplex[2], simplex[1] - simplex[2])
       plane[1] = wp.cross(simplex[3] - simplex[0], simplex[2] - simplex[0])
@@ -470,65 +462,25 @@ def gjk_epa_pipeline(
         break
 
       # Add new support point to the simplex.
-      # wp.printf("    index: %d\n", index)
       dist, simplex_i = wp.static(gjk_support(type1, type2))(
         info1, info2, plane[index], m.mesh_vert
       )
-      # wp.printf("    dist: %f\n", dist)
       simplex[index] = simplex_i
       if dist < depth:
         depth = dist
         normal = plane[index]
-      # wp.printf("dist: %f\n", dist)
 
       # Preserve winding order of the simplex faces.
       index1 = (index + 1) & 3
       index2 = (index + 2) & 3
       swap = simplex[index1]
-      # wp.printf("    swap: %f %f %f\n", swap[0], swap[1], swap[2])
       simplex[index1] = simplex[index2]
       simplex[index2] = swap
-      # wp.printf("simplex[0]: %f %f %f\n", simplex[0, 0], simplex[0, 1], simplex[0, 2])
-      # wp.printf("simplex[1]: %f %f %f\n", simplex[1, 0], simplex[1, 1], simplex[1, 2])
-      # wp.printf("simplex[2]: %f %f %f\n", simplex[2, 0], simplex[2, 1], simplex[2, 2])
-      # wp.printf("simplex[3]: %f %f %f\n", simplex[3, 0], simplex[3, 1], simplex[3, 2])
       if dist < 0.0:
         break  # Objects are likely non-intersecting.
 
     return simplex, normal
 
-  @wp.kernel
-  def gjk_dense(
-    m: Model,
-    d: Data,
-    npair: int,
-    nenv: int,
-    geom_pair: wp.array(dtype=int, ndim=2),
-    contact_normal: wp.array(dtype=wp.vec3),
-    contact_simplex: wp.array(dtype=mat43),
-  ):
-    tid = wp.tid()
-    if tid >= npair * nenv:
-      return
-
-    pair_id = tid % npair
-    env_id = tid // npair
-
-    g1, g2 = geom_pair[pair_id, 0], geom_pair[pair_id, 1]
-    if g1 < 0 or g2 < 0:
-      return
-
-    simplex, normal = _gjk(
-      env_id,
-      m,
-      d,
-      g1,
-      g2,
-    )
-    contact_simplex[tid] = simplex
-
-    if contact_normal:
-      contact_normal[tid] = normal
 
   matc3 = wp.types.matrix(shape=(max_epa_best_count, 3), dtype=float)
   vecc3 = wp.types.vector(max_epa_best_count * 3, dtype=float)
@@ -702,54 +654,6 @@ def gjk_epa_pipeline(
 
     return depth, normal
 
-  @wp.kernel
-  def epa_dense(
-    m: Model,
-    d: Data,
-    npair: int,
-    nenv: int,
-    ncon: int,
-    geom_pair: wp.array(dtype=int, ndim=2),
-    contact_simplex: wp.array(dtype=mat43),
-    depth_extension: float,
-    epa_best_count: int,
-    # outputs
-    contact_dist: wp.array(dtype=float),
-    contact_normal: wp.vec3,
-  ):
-    tid = wp.tid()
-    if tid >= npair * nenv:
-      return
-
-    pair_id = tid % npair
-    env_id = tid // npair
-
-    g1 = geom_pair[pair_id, 0]
-    g2 = geom_pair[pair_id, 1]
-    if g1 < 0 or g2 < 0:
-      return
-
-    simplex = contact_simplex[tid]
-    input_normal = contact_normal
-    depth, normal = _epa(
-      env_id,
-      m,
-      d,
-      g1,
-      g2,
-      depth_extension,
-      epa_best_count,
-      simplex,
-      input_normal,
-    )
-
-    if wp.isnan(depth) or depth < -depth_extension:
-      return
-
-    contact_normal = normal
-
-    for i in range(ncon):
-      contact_dist[tid * ncon + i] = -depth
 
   mat3p = wp.types.matrix(shape=(kMaxMultiPolygonCount, 3), dtype=float)
 
@@ -782,347 +686,300 @@ def gjk_epa_pipeline(
     #    directions are found. This can be modified to the extremes in the
     #    direction of eigenvectors of the variance of points of each polygon. If
     #    they do not intersect, the closest points of both polygons are found.
-    #info1 = wp.static(get_info(type1))(g1, m, d.geom_xpos[env_id], d.geom_xmat[env_id])
-    #info2 = wp.static(get_info(type2))(g2, m, d.geom_xpos[env_id], d.geom_xmat[env_id])
+    info1 = wp.static(get_info(type1))(g1, m, d.geom_xpos[env_id], d.geom_xmat[env_id])
+    info2 = wp.static(get_info(type2))(g2, m, d.geom_xpos[env_id], d.geom_xmat[env_id])
 
-    # if depth < -depth_extension:
-    #   return
+    if depth < -depth_extension:
+      return
 
-    # dir = orthonormal(normal)
-    # dir2 = wp.cross(normal, dir)
+    dir = orthonormal(normal)
+    dir2 = wp.cross(normal, dir)
 
-    # angle = multi_tilt_angle * wp.pi / 180.0
-    # c = wp.cos(angle)
-    # s = wp.sin(angle)
-    # t = 1.0 - c
+    angle = multi_tilt_angle * wp.pi / 180.0
+    c = wp.cos(angle)
+    s = wp.sin(angle)
+    t = 1.0 - c
 
-    # v1 = mat3p()
-    # v2 = mat3p()
+    v1 = mat3p()
+    v2 = mat3p()
 
     contact_points = mat3c()
 
     # Obtain points on the polygon determined by the support and tilt angle,
     # in the basis of the contact frame.
-    # v1count = int(0)
-    # v2count = int(0)
-    return 0, contact_points
-    # for i in range(multi_polygon_count):
-    #   angle = 2.0 * float(i) * wp.pi / float(multi_polygon_count)
-    #   axis = wp.cos(angle) * dir + wp.sin(angle) * dir2
+    v1count = int(0)
+    v2count = int(0)
+    #return 0, contact_points
+    for i in range(multi_polygon_count):
+      angle = 2.0 * float(i) * wp.pi / float(multi_polygon_count)
+      axis = wp.cos(angle) * dir + wp.sin(angle) * dir2
 
-    #   # Axis-angle rotation matrix. See
-    #   # https://en.wikipedia.org/wiki/Rotation_matrix#Rotation_matrix_from_axis_and_angle
-    #   mat0 = c + axis[0] * axis[0] * t
-    #   mat5 = c + axis[1] * axis[1] * t
-    #   mat10 = c + axis[2] * axis[2] * t
-    #   t1 = axis[0] * axis[1] * t
-    #   t2 = axis[2] * s
-    #   mat4 = t1 + t2
-    #   mat1 = t1 - t2
-    #   t1 = axis[0] * axis[2] * t
-    #   t2 = axis[1] * s
-    #   mat8 = t1 - t2
-    #   mat2 = t1 + t2
-    #   t1 = axis[1] * axis[2] * t
-    #   t2 = axis[0] * s
-    #   mat9 = t1 + t2
-    #   mat6 = t1 - t2
+      # Axis-angle rotation matrix. See
+      # https://en.wikipedia.org/wiki/Rotation_matrix#Rotation_matrix_from_axis_and_angle
+      mat0 = c + axis[0] * axis[0] * t
+      mat5 = c + axis[1] * axis[1] * t
+      mat10 = c + axis[2] * axis[2] * t
+      t1 = axis[0] * axis[1] * t
+      t2 = axis[2] * s
+      mat4 = t1 + t2
+      mat1 = t1 - t2
+      t1 = axis[0] * axis[2] * t
+      t2 = axis[1] * s
+      mat8 = t1 - t2
+      mat2 = t1 + t2
+      t1 = axis[1] * axis[2] * t
+      t2 = axis[0] * s
+      mat9 = t1 + t2
+      mat6 = t1 - t2
 
-    #   n = wp.vec3(
-    #     mat0 * normal[0] + mat1 * normal[1] + mat2 * normal[2],
-    #     mat4 * normal[0] + mat5 * normal[1] + mat6 * normal[2],
-    #     mat8 * normal[0] + mat9 * normal[1] + mat10 * normal[2],
-    #   )
+      n = wp.vec3(
+        mat0 * normal[0] + mat1 * normal[1] + mat2 * normal[2],
+        mat4 * normal[0] + mat5 * normal[1] + mat6 * normal[2],
+        mat8 * normal[0] + mat9 * normal[1] + mat10 * normal[2],
+      )
 
-    #   if wp.static(type1 == GeomType.SPHERE.value):
-    #     _, p = gjk_support_sphere(info1, n, m.mesh_vert)
-    #   elif wp.static(type1 == GeomType.BOX.value):
-    #     _, p = gjk_support_box(info1, n, m.mesh_vert)
-    #   elif wp.static(type1 == GeomType.PLANE.value):
-    #     _, p = gjk_support_plane(info1, n, m.mesh_vert)
-    #   elif wp.static(type1 == GeomType.CAPSULE.value):
-    #     _, p = gjk_support_capsule(info1, n, m.mesh_vert)
-    #   elif wp.static(type1 == GeomType.ELLIPSOID.value):
-    #     _, p = gjk_support_ellipsoid(info1, n, m.mesh_vert)
-    #   elif wp.static(type1 == GeomType.CYLINDER.value):
-    #     _, p = gjk_support_cylinder(info1, n, m.mesh_vert)
-    #   elif wp.static(type1 == GeomType.MESH.value):
-    #     _, p = gjk_support_convex(info1, n, m.mesh_vert)
-    #   else:
-    #     _, p = 0.0, wp.vec3(0.0)
+      if wp.static(type1 == GeomType.SPHERE.value):
+        _, p = gjk_support_sphere(info1, n, m.mesh_vert)
+      elif wp.static(type1 == GeomType.BOX.value):
+        _, p = gjk_support_box(info1, n, m.mesh_vert)
+      elif wp.static(type1 == GeomType.PLANE.value):
+        _, p = gjk_support_plane(info1, n, m.mesh_vert)
+      elif wp.static(type1 == GeomType.CAPSULE.value):
+        _, p = gjk_support_capsule(info1, n, m.mesh_vert)
+      elif wp.static(type1 == GeomType.ELLIPSOID.value):
+        _, p = gjk_support_ellipsoid(info1, n, m.mesh_vert)
+      elif wp.static(type1 == GeomType.CYLINDER.value):
+        _, p = gjk_support_cylinder(info1, n, m.mesh_vert)
+      elif wp.static(type1 == GeomType.MESH.value):
+        _, p = gjk_support_convex(info1, n, m.mesh_vert)
+      else:
+        _, p = 0.0, wp.vec3(0.0)
 
-    #   v1[v1count] = wp.vec3(wp.dot(p, dir), wp.dot(p, dir2), wp.dot(p, normal))
-    #   if i != 0 or any_different(v1[v1count], v1[v1count - 1]):
-    #     v1count += 1
+      v1[v1count] = wp.vec3(wp.dot(p, dir), wp.dot(p, dir2), wp.dot(p, normal))
+      if i != 0 or any_different(v1[v1count], v1[v1count - 1]):
+        v1count += 1
 
-    #   n = -n
-    #   if wp.static(type2 == GeomType.SPHERE.value):
-    #     _, p = gjk_support_sphere(info2, n, m.mesh_vert)
-    #   elif wp.static(type2 == GeomType.BOX.value):
-    #     _, p = gjk_support_box(info2, n, m.mesh_vert)
-    #   elif wp.static(type2 == GeomType.PLANE.value):
-    #     _, p = gjk_support_plane(info2, n, m.mesh_vert)
-    #   elif wp.static(type2 == GeomType.CAPSULE.value):
-    #     _, p = gjk_support_capsule(info2, n, m.mesh_vert)
-    #   elif wp.static(type2 == GeomType.ELLIPSOID.value):
-    #     _, p = gjk_support_ellipsoid(info2, n, m.mesh_vert)
-    #   elif wp.static(type2 == GeomType.CYLINDER.value):
-    #     _, p = gjk_support_cylinder(info2, n, m.mesh_vert)
-    #   elif wp.static(type2 == GeomType.MESH.value):
-    #     _, p = gjk_support_convex(info2, n, m.mesh_vert)
-    #   else:
-    #     _, p = 0.0, wp.vec3(0.0)
-    #   v2[v2count] = wp.vec3(wp.dot(p, dir), wp.dot(p, dir2), wp.dot(p, normal))
-    #   if i != 0 or any_different(v2[v2count], v2[v2count - 1]):
-    #     v2count += 1
+      n = -n
+      if wp.static(type2 == GeomType.SPHERE.value):
+        _, p = gjk_support_sphere(info2, n, m.mesh_vert)
+      elif wp.static(type2 == GeomType.BOX.value):
+        _, p = gjk_support_box(info2, n, m.mesh_vert)
+      elif wp.static(type2 == GeomType.PLANE.value):
+        _, p = gjk_support_plane(info2, n, m.mesh_vert)
+      elif wp.static(type2 == GeomType.CAPSULE.value):
+        _, p = gjk_support_capsule(info2, n, m.mesh_vert)
+      elif wp.static(type2 == GeomType.ELLIPSOID.value):
+        _, p = gjk_support_ellipsoid(info2, n, m.mesh_vert)
+      elif wp.static(type2 == GeomType.CYLINDER.value):
+        _, p = gjk_support_cylinder(info2, n, m.mesh_vert)
+      elif wp.static(type2 == GeomType.MESH.value):
+        _, p = gjk_support_convex(info2, n, m.mesh_vert)
+      else:
+        _, p = 0.0, wp.vec3(0.0)
+      v2[v2count] = wp.vec3(wp.dot(p, dir), wp.dot(p, dir2), wp.dot(p, normal))
+      if i != 0 or any_different(v2[v2count], v2[v2count - 1]):
+        v2count += 1
 
-    # # Remove duplicate vertices on the array boundary.
-    # if v1count > 1 and all_same(v1[v1count - 1], v1[0]):
-    #   v1count -= 1
-    # if v2count > 1 and all_same(v2[v2count - 1], v2[0]):
-    #   v2count -= 1
+    # Remove duplicate vertices on the array boundary.
+    if v1count > 1 and all_same(v1[v1count - 1], v1[0]):
+      v1count -= 1
+    if v2count > 1 and all_same(v2[v2count - 1], v2[0]):
+      v2count -= 1
 
-    # # Find an intersecting polygon between v1 and v2 in the 2D plane.
-    # out = mat43()
-    # candCount = int(0)
-    # if v2count > 1:
-    #   for i in range(v1count):
-    #     m1a = v1[i]
-    #     is_in = bool(True)
+    # Find an intersecting polygon between v1 and v2 in the 2D plane.
+    out = mat43()
+    candCount = int(0)
+    if v2count > 1:
+      for i in range(v1count):
+        m1a = v1[i]
+        is_in = bool(True)
 
-    #     # Check if point m1a is inside the v2 polygon on the 2D plane.
-    #     for j in range(v2count):
-    #       j2 = (j + 1) % v2count
-    #       # Checks that orientation of the triangle (v2[j], v2[j2], m1a) is
-    #       # counter-clockwise. If so, point m1a is inside the v2 polygon.
-    #       is_in = is_in and (
-    #         (v2[j2][0] - v2[j][0]) * (m1a[1] - v2[j][1])
-    #         - (v2[j2][1] - v2[j][1]) * (m1a[0] - v2[j][0])
-    #         >= 0.0
-    #       )
-    #       if not is_in:
-    #         break
+        # Check if point m1a is inside the v2 polygon on the 2D plane.
+        for j in range(v2count):
+          j2 = (j + 1) % v2count
+          # Checks that orientation of the triangle (v2[j], v2[j2], m1a) is
+          # counter-clockwise. If so, point m1a is inside the v2 polygon.
+          is_in = is_in and (
+            (v2[j2][0] - v2[j][0]) * (m1a[1] - v2[j][1])
+            - (v2[j2][1] - v2[j][1]) * (m1a[0] - v2[j][0])
+            >= 0.0
+          )
+          if not is_in:
+            break
 
-    #     if is_in:
-    #       if not candCount or m1a[0] < out[0, 0]:
-    #         out[0] = m1a
-    #       if not candCount or m1a[0] > out[1, 0]:
-    #         out[1] = m1a
-    #       if not candCount or m1a[1] < out[2, 1]:
-    #         out[2] = m1a
-    #       if not candCount or m1a[1] > out[3, 1]:
-    #         out[3] = m1a
-    #       candCount += 1
+        if is_in:
+          if not candCount or m1a[0] < out[0, 0]:
+            out[0] = m1a
+          if not candCount or m1a[0] > out[1, 0]:
+            out[1] = m1a
+          if not candCount or m1a[1] < out[2, 1]:
+            out[2] = m1a
+          if not candCount or m1a[1] > out[3, 1]:
+            out[3] = m1a
+          candCount += 1
 
-    # if v1count > 1:
-    #   for i in range(v2count):
-    #     m1a = v2[i]
-    #     is_in = bool(True)
+    if v1count > 1:
+      for i in range(v2count):
+        m1a = v2[i]
+        is_in = bool(True)
 
-    #     for j in range(v1count):
-    #       j2 = (j + 1) % v1count
-    #       is_in = (
-    #         is_in
-    #         and (v1[j2][0] - v1[j][0]) * (m1a[1] - v1[j][1])
-    #         - (v1[j2][1] - v1[j][1]) * (m1a[0] - v1[j][0])
-    #         >= 0.0
-    #       )
-    #       if not is_in:
-    #         break
+        for j in range(v1count):
+          j2 = (j + 1) % v1count
+          is_in = (
+            is_in
+            and (v1[j2][0] - v1[j][0]) * (m1a[1] - v1[j][1])
+            - (v1[j2][1] - v1[j][1]) * (m1a[0] - v1[j][0])
+            >= 0.0
+          )
+          if not is_in:
+            break
 
-    #     if is_in:
-    #       if not candCount or m1a[0] < out[0, 0]:
-    #         out[0] = m1a
-    #       if not candCount or m1a[0] > out[1, 0]:
-    #         out[1] = m1a
-    #       if not candCount or m1a[1] < out[2, 1]:
-    #         out[2] = m1a
-    #       if not candCount or m1a[1] > out[3, 1]:
-    #         out[3] = m1a
-    #       candCount += 1
+        if is_in:
+          if not candCount or m1a[0] < out[0, 0]:
+            out[0] = m1a
+          if not candCount or m1a[0] > out[1, 0]:
+            out[1] = m1a
+          if not candCount or m1a[1] < out[2, 1]:
+            out[2] = m1a
+          if not candCount or m1a[1] > out[3, 1]:
+            out[3] = m1a
+          candCount += 1
 
-    # if v1count > 1 and v2count > 1:
-    #   # Check all edge pairs, and store line segment intersections if they are
-    #   # on the edge of the boundary.
-    #   for i in range(v1count):
-    #     for j in range(v2count):
-    #       m1a = v1[i]
-    #       m1b = v1[(i + 1) % v1count]
-    #       m2a = v2[j]
-    #       m2b = v2[(j + 1) % v2count]
+    if v1count > 1 and v2count > 1:
+      # Check all edge pairs, and store line segment intersections if they are
+      # on the edge of the boundary.
+      for i in range(v1count):
+        for j in range(v2count):
+          m1a = v1[i]
+          m1b = v1[(i + 1) % v1count]
+          m2a = v2[j]
+          m2b = v2[(j + 1) % v2count]
 
-    #       det = (m2a[1] - m2b[1]) * (m1b[0] - m1a[0]) - (m1a[1] - m1b[1]) * (
-    #         m2b[0] - m2a[0]
-    #       )
-    #       if wp.abs(det) > 1e-12:
-    #         a11 = (m2a[1] - m2b[1]) / det
-    #         a12 = (m2b[0] - m2a[0]) / det
-    #         a21 = (m1a[1] - m1b[1]) / det
-    #         a22 = (m1b[0] - m1a[0]) / det
-    #         b1 = m2a[0] - m1a[0]
-    #         b2 = m2a[1] - m1a[1]
+          det = (m2a[1] - m2b[1]) * (m1b[0] - m1a[0]) - (m1a[1] - m1b[1]) * (
+            m2b[0] - m2a[0]
+          )
+          if wp.abs(det) > 1e-12:
+            a11 = (m2a[1] - m2b[1]) / det
+            a12 = (m2b[0] - m2a[0]) / det
+            a21 = (m1a[1] - m1b[1]) / det
+            a22 = (m1b[0] - m1a[0]) / det
+            b1 = m2a[0] - m1a[0]
+            b2 = m2a[1] - m1a[1]
 
-    #         alpha = a11 * b1 + a12 * b2
-    #         beta = a21 * b1 + a22 * b2
-    #         if alpha >= 0.0 and alpha <= 1.0 and beta >= 0.0 and beta <= 1.0:
-    #           m0 = wp.vec3(
-    #             m1a[0] + alpha * (m1b[0] - m1a[0]),
-    #             m1a[1] + alpha * (m1b[1] - m1a[1]),
-    #             (m1a[2] + alpha * (m1b[2] - m1a[2]) + m2a[2] + beta * (m2b[2] - m2a[2]))
-    #             * 0.5,
-    #           )
-    #           if not candCount or m0[0] < out[0, 0]:
-    #             out[0] = m0
-    #           if not candCount or m0[0] > out[1, 0]:
-    #             out[1] = m0
-    #           if not candCount or m0[1] < out[2, 1]:
-    #             out[2] = m0
-    #           if not candCount or m0[1] > out[3, 1]:
-    #             out[3] = m0
-    #           candCount += 1
+            alpha = a11 * b1 + a12 * b2
+            beta = a21 * b1 + a22 * b2
+            if alpha >= 0.0 and alpha <= 1.0 and beta >= 0.0 and beta <= 1.0:
+              m0 = wp.vec3(
+                m1a[0] + alpha * (m1b[0] - m1a[0]),
+                m1a[1] + alpha * (m1b[1] - m1a[1]),
+                (m1a[2] + alpha * (m1b[2] - m1a[2]) + m2a[2] + beta * (m2b[2] - m2a[2]))
+                * 0.5,
+              )
+              if not candCount or m0[0] < out[0, 0]:
+                out[0] = m0
+              if not candCount or m0[0] > out[1, 0]:
+                out[1] = m0
+              if not candCount or m0[1] < out[2, 1]:
+                out[2] = m0
+              if not candCount or m0[1] > out[3, 1]:
+                out[3] = m0
+              candCount += 1
 
-    # var_rx = wp.vec3(0.0)
-    # contact_count = int(0)
-    # if candCount > 0:
-    #   # Polygon intersection was found.
-    #   # TODO(btaba): replace the above routine with the manifold point routine
-    #   # from MJX. Deduplicate the points properly.
-    #   last_pt = wp.vec3(FLOAT_MAX, FLOAT_MAX, FLOAT_MAX)
+    var_rx = wp.vec3(0.0)
+    contact_count = int(0)
+    if candCount > 0:
+      # Polygon intersection was found.
+      # TODO(btaba): replace the above routine with the manifold point routine
+      # from MJX. Deduplicate the points properly.
+      last_pt = wp.vec3(FLOAT_MAX, FLOAT_MAX, FLOAT_MAX)
 
-    #   for k in range(wp.static(kGjkMultiContactCount)):
-    #     pt = out[k, 0] * dir + out[k, 1] * dir2 + out[k, 2] * normal
-    #     # Skip contact points that are too close.
-    #     if wp.length(pt - last_pt) <= 1e-6:
-    #       continue
-    #     contact_points[contact_count] = pt
-    #     last_pt = pt
-    #     contact_count += 1
+      for k in range(wp.static(kGjkMultiContactCount)):
+        pt = out[k, 0] * dir + out[k, 1] * dir2 + out[k, 2] * normal
+        # Skip contact points that are too close.
+        if wp.length(pt - last_pt) <= 1e-6:
+          continue
+        contact_points[contact_count] = pt
+        last_pt = pt
+        contact_count += 1
 
-    # else:
-    #   # Polygon intersection was not found. Loop through all vertex pairs and
-    #   # calculate an approximate contact point.
-    #   minDist = float(0.0)
-    #   for i in range(v1count):
-    #     for j in range(v2count):
-    #       # Find the closest vertex pair. Calculate a contact point var_rx as the
-    #       # midpoint between the closest vertex pair.
-    #       m1 = v1[i]
-    #       m2 = v2[j]
-    #       dd = (m1[0] - m2[0]) * (m1[0] - m2[0]) + (m1[1] - m2[1]) * (m1[1] - m2[1])
-    #       if i != 0 and j != 0 or dd < minDist:
-    #         minDist = dd
-    #         var_rx = (
-    #           (m1[0] + m2[0]) * dir + (m1[1] + m2[1]) * dir2 + (m1[2] + m2[2]) * normal
-    #         ) * 0.5
+    else:
+      # Polygon intersection was not found. Loop through all vertex pairs and
+      # calculate an approximate contact point.
+      minDist = float(0.0)
+      for i in range(v1count):
+        for j in range(v2count):
+          # Find the closest vertex pair. Calculate a contact point var_rx as the
+          # midpoint between the closest vertex pair.
+          m1 = v1[i]
+          m2 = v2[j]
+          dd = (m1[0] - m2[0]) * (m1[0] - m2[0]) + (m1[1] - m2[1]) * (m1[1] - m2[1])
+          if i != 0 and j != 0 or dd < minDist:
+            minDist = dd
+            var_rx = (
+              (m1[0] + m2[0]) * dir + (m1[1] + m2[1]) * dir2 + (m1[2] + m2[2]) * normal
+            ) * 0.5
 
-    #       # Check for a closer point between a point on v2 and an edge on v1.
-    #       m1b = v1[(i + 1) % v1count]
-    #       m2b = v2[(j + 1) % v2count]
-    #       if v1count > 1:
-    #         dd = (m1b[0] - m1[0]) * (m1b[0] - m1[0]) + (m1b[1] - m1[1]) * (
-    #           m1b[1] - m1[1]
-    #         )
-    #         t = (
-    #           (m2[1] - m1[1]) * (m1b[0] - m1[0]) - (m2[0] - m1[0]) * (m1b[1] - m1[1])
-    #         ) / dd
-    #         dx = m2[0] + (m1b[1] - m1[1]) * t
-    #         dy = m2[1] - (m1b[0] - m1[0]) * t
-    #         dist = (dx - m2[0]) * (dx - m2[0]) + (dy - m2[1]) * (dy - m2[1])
+          # Check for a closer point between a point on v2 and an edge on v1.
+          m1b = v1[(i + 1) % v1count]
+          m2b = v2[(j + 1) % v2count]
+          if v1count > 1:
+            dd = (m1b[0] - m1[0]) * (m1b[0] - m1[0]) + (m1b[1] - m1[1]) * (
+              m1b[1] - m1[1]
+            )
+            t = (
+              (m2[1] - m1[1]) * (m1b[0] - m1[0]) - (m2[0] - m1[0]) * (m1b[1] - m1[1])
+            ) / dd
+            dx = m2[0] + (m1b[1] - m1[1]) * t
+            dy = m2[1] - (m1b[0] - m1[0]) * t
+            dist = (dx - m2[0]) * (dx - m2[0]) + (dy - m2[1]) * (dy - m2[1])
 
-    #         if (
-    #           (dist < minDist)
-    #           and (
-    #             (dx - m1[0]) * (m1b[0] - m1[0]) + (dy - m1[1]) * (m1b[1] - m1[1]) >= 0
-    #           )
-    #           and (
-    #             (dx - m1b[0]) * (m1[0] - m1b[0]) + (dy - m1b[1]) * (m1[1] - m1b[1]) >= 0
-    #           )
-    #         ):
-    #           alpha = wp.sqrt(
-    #             ((dx - m1[0]) * (dx - m1[0]) + (dy - m1[1]) * (dy - m1[1])) / dd
-    #           )
-    #           minDist = dist
-    #           w = ((1.0 - alpha) * m1 + alpha * m1b + m2) * 0.5
-    #           var_rx = w[0] * dir + w[1] * dir2 + w[2] * normal
+            if (
+              (dist < minDist)
+              and (
+                (dx - m1[0]) * (m1b[0] - m1[0]) + (dy - m1[1]) * (m1b[1] - m1[1]) >= 0
+              )
+              and (
+                (dx - m1b[0]) * (m1[0] - m1b[0]) + (dy - m1b[1]) * (m1[1] - m1b[1]) >= 0
+              )
+            ):
+              alpha = wp.sqrt(
+                ((dx - m1[0]) * (dx - m1[0]) + (dy - m1[1]) * (dy - m1[1])) / dd
+              )
+              minDist = dist
+              w = ((1.0 - alpha) * m1 + alpha * m1b + m2) * 0.5
+              var_rx = w[0] * dir + w[1] * dir2 + w[2] * normal
 
-    #       # Check for a closer point between a point on v1 and an edge on v2.
-    #       if v2count > 1:
-    #         dd = (m2b[0] - m2[0]) * (m2b[0] - m2[0]) + (m2b[1] - m2[1]) * (
-    #           m2b[1] - m2[1]
-    #         )
-    #         t = (
-    #           (m1[1] - m2[1]) * (m2b[0] - m2[0]) - (m1[0] - m2[0]) * (m2b[1] - m2[1])
-    #         ) / dd
-    #         dx = m1[0] + (m2b[1] - m2[1]) * t
-    #         dy = m1[1] - (m2b[0] - m2[0]) * t
-    #         dist = (dx - m1[0]) * (dx - m1[0]) + (dy - m1[1]) * (dy - m1[1])
+          # Check for a closer point between a point on v1 and an edge on v2.
+          if v2count > 1:
+            dd = (m2b[0] - m2[0]) * (m2b[0] - m2[0]) + (m2b[1] - m2[1]) * (
+              m2b[1] - m2[1]
+            )
+            t = (
+              (m1[1] - m2[1]) * (m2b[0] - m2[0]) - (m1[0] - m2[0]) * (m2b[1] - m2[1])
+            ) / dd
+            dx = m1[0] + (m2b[1] - m2[1]) * t
+            dy = m1[1] - (m2b[0] - m2[0]) * t
+            dist = (dx - m1[0]) * (dx - m1[0]) + (dy - m1[1]) * (dy - m1[1])
 
-    #         if (
-    #           dist < minDist
-    #           and (dx - m2[0]) * (m2b[0] - m2[0]) + (dy - m2[1]) * (m2b[1] - m2[1]) >= 0
-    #           and (dx - m2b[0]) * (m2[0] - m2b[0]) + (dy - m2b[1]) * (m2[1] - m2b[1])
-    #           >= 0
-    #         ):
-    #           alpha = wp.sqrt(
-    #             ((dx - m2[0]) * (dx - m2[0]) + (dy - m2[1]) * (dy - m2[1])) / dd
-    #           )
-    #           minDist = dist
-    #           w = (m1 + (1.0 - alpha) * m2 + alpha * m2b) * 0.5
-    #           var_rx = w[0] * dir + w[1] * dir2 + w[2] * normal
+            if (
+              dist < minDist
+              and (dx - m2[0]) * (m2b[0] - m2[0]) + (dy - m2[1]) * (m2b[1] - m2[1]) >= 0
+              and (dx - m2b[0]) * (m2[0] - m2b[0]) + (dy - m2b[1]) * (m2[1] - m2b[1])
+              >= 0
+            ):
+              alpha = wp.sqrt(
+                ((dx - m2[0]) * (dx - m2[0]) + (dy - m2[1]) * (dy - m2[1])) / dd
+              )
+              minDist = dist
+              w = (m1 + (1.0 - alpha) * m2 + alpha * m2b) * 0.5
+              var_rx = w[0] * dir + w[1] * dir2 + w[2] * normal
 
-    #   for k in range(wp.static(kGjkMultiContactCount)):
-    #     contact_points[k] = var_rx
+      for k in range(wp.static(kGjkMultiContactCount)):
+        contact_points[k] = var_rx
 
-    #   contact_count = 1
+      contact_count = 1
 
-    # return contact_count, contact_points
-
-  @wp.kernel
-  def multiple_contacts_dense(
-    npair: int,
-    nenv: int,
-    m: Model,
-    d: Data,
-    ncon: int,
-    geom_pair: wp.array(dtype=int, ndim=2),
-    depth_extension: float,
-    multi_polygon_count: int,
-    multi_tilt_angle: float,
-    contact_dist: wp.array(dtype=float),
-    contact_normal: wp.array(dtype=wp.vec3),
-    # outputs
-    contact_pos: wp.array(dtype=wp.vec3),
-  ):
-    tid = wp.tid()
-    if tid >= npair * nenv:
-      return
-
-    pair_id = tid % npair
-    env_id = tid // npair
-
-    g1 = geom_pair[pair_id, 0]
-    g2 = geom_pair[pair_id, 1]
-    if g1 < 0 or g2 < 0:
-      return
-
-    normal = contact_normal[tid]
-    depth = -contact_dist[tid * ncon]
-
-    count, points = _get_multiple_contacts(
-      env_id,
-      m,
-      d,
-      g1,
-      g2,
-      depth_extension,
-      multi_polygon_count,
-      multi_tilt_angle,
-      depth,
-      normal,
-    )
-
-    for i in range(ncon):
-      contact_pos[tid * ncon + i] = points[i % count]
+    return contact_count, contact_points
 
 
   # Runs GJK and EPA on a set of sparse geom pairs per env.
@@ -1153,11 +1010,7 @@ def gjk_epa_pipeline(
 
     g1 = geoms[0]
     g2 = geoms[1]
-    wp.printf("g1: %u, g2: %u, env_id: %u\n", g1, g2, env_id)
-    # wp.printf("type_pair_id: %d, env_id: %d\n", type_pair_id, env_id)
 
-
-    # print("GJK")
     simplex, normal = _gjk(
       env_id,
       m,
@@ -1165,13 +1018,6 @@ def gjk_epa_pipeline(
       g1,
       g2,
     )
-
-    # print("simplex:")
-    # print(simplex)
-    # print("normal:")
-    # print(normal)
-
-    # print("EPA")
 
     # TODO(btaba): get depth from GJK, conditionally run EPA.
     depth, normal = _epa(
@@ -1186,179 +1032,38 @@ def gjk_epa_pipeline(
       normal,
     )
 
-    # print("normal:")
-    # print(normal)
-    # wp.printf("depth: %f\n", depth)
-
     # TODO(btaba): add support for margin here.
     if depth < 0.0:
       return
 
     # TODO(btaba): split get_multiple_contacts into a separate kernel.
-    # count, points = _get_multiple_contacts(
-    #   env_id,
-    #   m,
-    #   d,
-    #   g1,
-    #   g2,
-    #   depth_extension,
-    #   multi_polygon_count,
-    #   multi_tilt_angle,
-    #   depth,
-    #   normal,
-    # )
+    count, points = _get_multiple_contacts(
+      env_id,
+      m,
+      d,
+      g1,
+      g2,
+      depth_extension,
+      multi_polygon_count,
+      multi_tilt_angle,
+      depth,
+      normal,
+    )
 
-    # contact_count = min(count, d.nconmax)
-    # cid = wp.atomic_add(d.ncon, env_id, contact_count)
-    # cid = cid + env_id * d.nconmax
-    # for i in range(contact_count):
-    #   d.contact.dist[cid + i] = -depth
-    #   d.contact.geom[cid + i] = geoms
-    #   d.contact.frame[cid + i] = make_frame(normal)
-    #   d.contact.pos[cid + i] = points[i]
+    contact_count = min(count, d.nconmax)
+    cid = wp.atomic_add(d.ncon, env_id, contact_count)
+    cid = cid + env_id * d.nconmax
+    for i in range(contact_count):
+      d.contact.dist[cid + i] = -depth
+      d.contact.geom[cid + i] = geoms
+      d.contact.frame[cid + i] = make_frame(normal)
+      d.contact.pos[cid + i] = points[i]
 
   return GjkEpaPipeline(
     type1,
     type2,
-    gjk_dense,
-    epa_dense,
-    multiple_contacts_dense,
     gjk_epa_sparse,
   )
-
-
-# def gjk_epa_dense(
-#   m: Model,
-#   geom_pair: wp.array(dtype=int, ndim=2),
-#   geom_xpos: wp.array(dtype=wp.vec3, ndim=2),
-#   geom_xmat: wp.array(dtype=wp.mat33, ndim=2),
-#   npair: int,
-#   ncon: int,
-#   geom_type0: int,
-#   geom_type1: int,
-#   depth_extension: float,
-#   gjk_iteration_count: int,
-#   epa_iteration_count: int,
-#   epa_best_count: int,
-#   multi_polygon_count: int,
-#   multi_tilt_angle: float,
-#   # outputs
-#   dist: wp.array(dtype=float),
-#   pos: wp.array(dtype=wp.vec3),
-#   normal: wp.array(dtype=wp.vec3),
-# ):
-#   # Get the batch size of mjx.Data.
-#   nenv = 1
-#   for i in range(
-#     geom_xpos.ndim
-#   ):  # note: geom_xpos is 2D in JAX, 1D in Warp for the unbatched case
-#     nenv *= geom_xpos.shape[i]
-#   nenv //= ngeom
-#   if nenv == 0:
-#     raise RuntimeError(
-#       "Batch size of mjx.Data calculated in LaunchKernel_GJK_EPA is 0."
-#     )
-
-#   # if len(geom_dataid) != ngeom:
-#   #     raise RuntimeError("Dimensions of geom_dataid in LaunchKernel_GJK_EPA do not match (ngeom,).")
-
-#   # create kernels
-#   pipeline = gjk_epa_pipeline(
-#     geom_type0,
-#     geom_type1,
-#     gjk_iteration_count,
-#     epa_iteration_count,
-#     epa_best_count,
-#   )
-
-#   # gjk_epa_init
-#   dist.fill_(1e12)
-
-#   # ensure proper shapes
-#   geom_pair = geom_pair.reshape((-1, 2))
-#   geom_xpos = geom_xpos.flatten()
-#   geom_xmat = geom_xmat.flatten()
-
-#   dist = dist.flatten()
-#   pos = pos.flatten()
-#   normal = normal.flatten()
-
-#   grid_size = npair * nenv
-#   # we allocate the simplex array here since it is never used as an output
-#   simplex = wp.empty((grid_size,), dtype=mat43)
-
-#   with wp.ScopedTimer("gjk_dense", use_nvtx=True):
-#     wp.launch(
-#       pipeline.gjk_dense,
-#       dim=grid_size,
-#       inputs=[
-#         m,
-#         npair,
-#         nenv,
-#         ngeom,
-#         geom_pair,
-#         geom_xpos,
-#         geom_xmat,
-#       ],
-#       outputs=[
-#         normal,
-#         simplex,
-#       ],
-#       device=geom_pair.device,
-#     )
-
-#   # print("normal:")
-#   # print(normal.numpy())
-#   # print("simplex:")
-#   # print(simplex.numpy())
-#   # print()
-
-#   with wp.ScopedTimer("epa_dense", use_nvtx=True):
-#     wp.launch(
-#       pipeline.epa_dense,
-#       dim=grid_size,
-#       inputs=[
-#         m,
-#         npair,
-#         nenv,
-#         ngeom,
-#         ncon,
-#         geom_pair,
-#         geom_xpos,
-#         geom_xmat,
-#         simplex,
-#         depth_extension,
-#         epa_best_count,
-#       ],
-#       outputs=[
-#         dist,
-#         normal,
-#       ],
-#       device=geom_pair.device,
-#     )
-
-#   with wp.ScopedTimer("multiple_contacts_dense", use_nvtx=True):
-#     wp.launch(
-#       pipeline.multiple_contacts_dense,
-#       dim=grid_size,
-#       inputs=[
-#         m,
-#         npair,
-#         nenv,
-#         ngeom,
-#         ncon,
-#         geom_pair,
-#         geom_xpos,
-#         geom_xmat,
-#         depth_extension,
-#         multi_polygon_count,
-#         multi_tilt_angle,
-#         dist,
-#         normal,
-#       ],
-#       outputs=[pos],
-#       device=geom_pair.device,
-#     )
 
 
 def _narrowphase(
@@ -1433,12 +1138,12 @@ def narrowphase_launch(
       )
 
 def narrowphase(m: Model, d: Data):
-  gjk_iteration_count = 100
-  epa_iteration_count = 100
-  epa_best_count = 100
-  multi_polygon_count = 100
+  gjk_iteration_count = 1
+  epa_iteration_count = 12
+  epa_best_count = 12
+  multi_polygon_count = 8
   depth_extension = 0.1
-  depth_extension = 0.1
+  multi_tilt_angle = 1.0
 
   narrowphase_launch(
     m,
@@ -1448,5 +1153,5 @@ def narrowphase(m: Model, d: Data):
     epa_best_count,
     depth_extension,
     multi_polygon_count,
-    depth_extension,
+    multi_tilt_angle,
   )
