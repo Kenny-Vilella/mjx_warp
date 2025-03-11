@@ -18,7 +18,6 @@ import warp as wp
 
 from .types import Model
 from .types import Data
-from .types import Contact
 from .types import GeomType
 from .types import MJ_MINVAL
 from .types import NUM_GEOM_TYPES
@@ -207,40 +206,7 @@ def create_gjk_support_function(type1, type2):
     # Positive distance means objects are intersecting along the given direction `dir`.
 
     dist1, s1 = wp.static(support_functions.get(type1, gjk_support_default))(info1, dir, convex_vert)
-    # if wp.static(type1 == GeomType.SPHERE.value):
-    #   dist1, s1 = gjk_support_sphere(info1, dir, convex_vert)
-    # elif wp.static(type1 == GeomType.BOX.value):
-    #   dist1, s1 = gjk_support_box(info1, dir, convex_vert)
-    # elif wp.static(type1 == GeomType.PLANE.value):
-    #   dist1, s1 = gjk_support_plane(info1, dir, convex_vert)
-    # elif wp.static(type1 == GeomType.CAPSULE.value):
-    #   dist1, s1 = gjk_support_capsule(info1, dir, convex_vert)
-    # elif wp.static(type1 == GeomType.ELLIPSOID.value):
-    #   dist1, s1 = gjk_support_ellipsoid(info1, dir, convex_vert)
-    # elif wp.static(type1 == GeomType.CYLINDER.value):
-    #   dist1, s1 = gjk_support_cylinder(info1, dir, convex_vert)
-    # elif wp.static(type1 == GeomType.MESH.value):
-    #   dist1, s1 = gjk_support_convex(info1, dir, convex_vert)
-    # else:
-    #   dist1, s1 = 0.0, wp.vec3(0.0)
-
     dist2, s2 = wp.static(support_functions.get(type2, gjk_support_default))(info2, -dir, convex_vert)
-    # if wp.static(type2 == GeomType.SPHERE.value):
-    #   dist2, s2 = gjk_support_sphere(info2, -dir, convex_vert)
-    # elif wp.static(type2 == GeomType.BOX.value):
-    #   dist2, s2 = gjk_support_box(info2, -dir, convex_vert)
-    # elif wp.static(type2 == GeomType.PLANE.value):
-    #   dist2, s2 = gjk_support_plane(info2, -dir, convex_vert)
-    # elif wp.static(type2 == GeomType.CAPSULE.value):
-    #   dist2, s2 = gjk_support_capsule(info2, -dir, convex_vert)
-    # elif wp.static(type2 == GeomType.ELLIPSOID.value):
-    #   dist2, s2 = gjk_support_ellipsoid(info2, -dir, convex_vert)
-    # elif wp.static(type2 == GeomType.CYLINDER.value):
-    #   dist2, s2 = gjk_support_cylinder(info2, -dir, convex_vert)
-    # elif wp.static(type2 == GeomType.MESH.value):
-    #   dist2, s2 = gjk_support_convex(info2, -dir, convex_vert)
-    # else:
-    #   dist2, s2 = 0.0, wp.vec3(0.0)
 
     support_pt = s1 - s2
     return dist1 + dist2, support_pt
