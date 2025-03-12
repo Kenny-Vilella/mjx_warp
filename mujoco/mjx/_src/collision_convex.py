@@ -40,6 +40,9 @@ from typing import Any
 
 # XXX disable backward pass codegen globally for now
 wp.config.enable_backward = False
+# XXX disable loop unrolling globally for now
+#     otherwise it takes 10min to compile
+wp.config.max_unroll = 0
 
 FLOAT_MIN = -1e30
 FLOAT_MAX = 1e30
@@ -60,6 +63,7 @@ def gjk_support_plane(
     nx = 1.0
     ny = 0.0
   nz = -float(int(local_dir[2] < 0))
+  # XXX This hardcoded value is suspicious
   largeSize = 5.0
   res = wp.vec3(nx * largeSize, ny * largeSize, nz * largeSize)
   support_pt = info.rot @ res + info.pos
