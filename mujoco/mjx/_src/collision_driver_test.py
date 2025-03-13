@@ -158,5 +158,3 @@ class ConvexTest(parameterized.TestCase):
     np.testing.assert_array_almost_equal(actual_dist, d.contact.dist[0], 2)
     np.testing.assert_array_almost_equal(actual_pos, d.contact.pos[0], 2)
     np.testing.assert_array_almost_equal(actual_frame, d.contact.frame[0], 2)
-
-

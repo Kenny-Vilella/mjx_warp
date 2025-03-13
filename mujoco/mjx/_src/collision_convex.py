@@ -414,13 +414,12 @@ def gjk_epa_pipeline(
 
     return simplex, normal
 
-
   # computes contact normal and depth
   @wp.func
   def _epa(
     env_id: int,
     m: Model,
-    d:Data,
+    d: Data,
     g1: int,
     g2: int,
     simplex: mat43,
@@ -509,7 +508,9 @@ def gjk_epa_pipeline(
           dists[i * 3 + j] = 2e30
         continue
 
-      dist, pi = wp.static(create_gjk_support_function(type1, type2))(info1, info2, n, m.mesh_vert)
+      dist, pi = wp.static(create_gjk_support_function(type1, type2))(
+        info1, info2, n, m.mesh_vert
+      )
       p[i] = pi
       if dist < depth:
         depth = dist
@@ -558,7 +559,6 @@ def gjk_epa_pipeline(
 
     return depth, normal
 
-
   @wp.func
   def _get_multiple_contacts(
     env_id: int,
@@ -605,7 +605,7 @@ def gjk_epa_pipeline(
     # in the basis of the contact frame.
     v1count = int(0)
     v2count = int(0)
-    #return 0, contact_points
+    # return 0, contact_points
     for i in range(wp.static(MULTI_POLYGON_COUNT)):
       angle = 2.0 * float(i) * wp.pi / float(MULTI_POLYGON_COUNT)
       axis = wp.cos(angle) * dir + wp.sin(angle) * dir2
@@ -846,7 +846,6 @@ def gjk_epa_pipeline(
 
     return contact_count, contact_points
 
-
   # Runs GJK and EPA on a set of sparse geom pairs per env.
   @wp.kernel
   def gjk_epa_sparse(
@@ -914,6 +913,7 @@ def gjk_epa_pipeline(
 
   return gjk_epa_sparse
 
+
 _collision_kernels = {}
 
 
@@ -938,4 +938,3 @@ def narrowphase(m: Model, d: Data):
 
   for collision_kernel in _collision_kernels.values():
     wp.launch(collision_kernel, dim=d.nconmax, inputs=[m, d])
-

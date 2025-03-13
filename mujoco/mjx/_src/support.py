@@ -217,9 +217,11 @@ def all_same(v0: wp.vec3, v1: wp.vec3) -> wp.bool:
   dy = abs(v0[1] - v1[1])
   dz = abs(v0[2] - v1[2])
 
-  return ((dx <= 1.0e-9 or dx <= max(abs(v0[0]), abs(v1[0])) * 1.0e-9) and
-    (dy <= 1.0e-9 or dy <= max(abs(v0[1]), abs(v1[1])) * 1.0e-9) and
-    (dz <= 1.0e-9 or dz <= max(abs(v0[2]), abs(v1[2])) * 1.0e-9))
+  return (
+    (dx <= 1.0e-9 or dx <= max(abs(v0[0]), abs(v1[0])) * 1.0e-9)
+    and (dy <= 1.0e-9 or dy <= max(abs(v0[1]), abs(v1[1])) * 1.0e-9)
+    and (dz <= 1.0e-9 or dz <= max(abs(v0[2]), abs(v1[2])) * 1.0e-9)
+  )
 
 
 @wp.func
@@ -228,9 +230,11 @@ def any_different(v0: wp.vec3, v1: wp.vec3) -> wp.bool:
   dy = abs(v0[1] - v1[1])
   dz = abs(v0[2] - v1[2])
 
-  return ((dx > 1.0e-9 and dx > max(abs(v0[0]), abs(v1[0])) * 1.0e-9) or
-    (dy > 1.0e-9 and dy > max(abs(v0[1]), abs(v1[1])) * 1.0e-9) or
-    (dz > 1.0e-9 and dz > max(abs(v0[2]), abs(v1[2])) * 1.0e-9))
+  return (
+    (dx > 1.0e-9 and dx > max(abs(v0[0]), abs(v1[0])) * 1.0e-9)
+    or (dy > 1.0e-9 and dy > max(abs(v0[1]), abs(v1[1])) * 1.0e-9)
+    or (dz > 1.0e-9 and dz > max(abs(v0[2]), abs(v1[2])) * 1.0e-9)
+  )
 
 
 @wp.func
