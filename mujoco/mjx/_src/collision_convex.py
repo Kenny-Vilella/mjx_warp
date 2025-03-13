@@ -905,10 +905,8 @@ def gjk_epa_pipeline(
       normal,
     )
 
-    contact_count = min(count, d.nconmax)
-    cid = wp.atomic_add(d.ncon, env_id, contact_count)
-    cid = cid + env_id * d.nconmax
-    for i in range(contact_count):
+    cid = wp.atomic_add(d.ncon, 0, count)
+    for i in range(count):
       d.contact.dist[cid + i] = -depth
       d.contact.geom[cid + i] = geoms
       d.contact.frame[cid + i] = make_frame(normal)
