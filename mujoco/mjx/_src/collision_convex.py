@@ -918,11 +918,6 @@ _collision_kernels = {}
 
 
 def narrowphase(m: Model, d: Data):
-  gjk_iteration_count = 1
-  epa_iteration_count = 12
-  depth_extension = 0.1
-  epa_exact_neg_distance = False
-
   if len(_collision_kernels) == 0:
     for t2 in range(NUM_GEOM_TYPES):
       for t1 in range(t2 + 1):
@@ -930,10 +925,10 @@ def narrowphase(m: Model, d: Data):
           _collision_kernels[(t1, t2)] = gjk_epa_pipeline(
             t1,
             t2,
-            gjk_iteration_count,
-            epa_iteration_count,
-            epa_exact_neg_distance,
-            depth_extension,
+            m.opt.gjk_iteration_count,
+            m.opt.epa_iteration_count,
+            m.opt.epa_exact_neg_distance,
+            m.opt.depth_extension,
           )
 
   for collision_kernel in _collision_kernels.values():

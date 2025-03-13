@@ -213,6 +213,10 @@ class Option:
   integrator: int  # mjtIntegrator
   impratio: wp.float32
   is_sparse: bool  # warp only
+  gjk_iteration_count: int  # warp only
+  epa_iteration_count: int  # warp only
+  epa_exact_neg_distance: bool  # warp only
+  depth_extension: float  # warp only
 
 
 @wp.struct
