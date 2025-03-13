@@ -39,13 +39,34 @@ from typing import Any
 
 
 # XXX disable backward pass codegen globally for now
+#     enabling backward pass leads to 10min compile time
 wp.config.enable_backward = False
-# XXX disable loop unrolling globally for now
-#     otherwise it takes 10min to compile
-wp.config.max_unroll = 0
 
 FLOAT_MIN = -1e30
 FLOAT_MAX = 1e30
+
+# XXX For the moment these parameters are constants to speedup compile time
+EPS_BEST_COUNT = 12
+MULTI_CONTACT_COUNT = 4
+MULTI_POLYGON_COUNT = 8
+MULTI_TILT_ANGLE = 1.0
+
+matc3 = wp.types.matrix(shape=(EPS_BEST_COUNT, 3), dtype=float)
+vecc3 = wp.types.vector(EPS_BEST_COUNT * 3, dtype=float)
+
+# Matrix definition for the `tris` scratch space which is used to store the
+# triangles of the polytope. Note that the first dimension is 2, as we need
+# to store the previous and current polytope. But since Warp doesn't support
+# 3D matrices yet, we use 2 * 3 * EPS_BEST_COUNT as the first dimension.
+TRIS_DIM = 3 * EPS_BEST_COUNT
+mat2c3 = wp.types.matrix(shape=(2 * TRIS_DIM, 3), dtype=float)
+mat3p = wp.types.matrix(shape=(MULTI_POLYGON_COUNT, 3), dtype=float)
+mat3c = wp.types.matrix(shape=(MULTI_CONTACT_COUNT, 3), dtype=float)
+mat43 = wp.types.matrix(shape=(4, 3), dtype=float)
+
+vec6 = wp.types.vector(6, dtype=int)
+VECI1 = vec6(0, 0, 0, 1, 1, 2)
+VECI2 = vec6(1, 2, 3, 2, 3, 3)
 
 
 @wp.func
@@ -214,8 +235,7 @@ def create_gjk_support_function(type1, type2):
 def gjk_normalize(a: wp.vec3):
   norm = wp.length(a)
   if norm > 1e-8 and norm < 1e12:
-    a /= norm
-    return a, True
+    return a / norm, True
   return a, False
 
 
@@ -237,7 +257,39 @@ def orthonormal(normal: wp.vec3) -> wp.vec3:
   return dir
 
 
-mat43 = wp.types.matrix(shape=(4, 3), dtype=float)
+@wp.func
+def _expand_polytope(
+  count: int,
+  prevCount: int,
+  dists: vecc3,
+  tris: mat2c3,
+  p: matc3,
+):
+  # Expand the polytope greedily.
+  for j in range(count):
+    bestIndex = int(0)
+    dd = float(dists[0])
+    for i in range(1, 3 * prevCount):
+      if dists[i] < dd:
+        dd = dists[i]
+        bestIndex = i
+
+    dists[bestIndex] = 2e30
+
+    parentIndex = bestIndex // 3
+    childIndex = bestIndex % 3
+    # fill in the new triangle at the next index
+    tris[TRIS_DIM + j * 3 + 0] = tris[parentIndex * 3 + childIndex]
+    tris[TRIS_DIM + j * 3 + 1] = tris[parentIndex * 3 + ((childIndex + 1) % 3)]
+    tris[TRIS_DIM + j * 3 + 2] = p[parentIndex]
+
+  for r in range(EPS_BEST_COUNT * 3):
+    # swap triangles
+    swap = tris[TRIS_DIM + r]
+    tris[TRIS_DIM + r] = tris[r]
+    tris[r] = swap
+
+  return dists, tris
 
 
 def gjk_epa_pipeline(
@@ -245,12 +297,8 @@ def gjk_epa_pipeline(
   type2: int,
   gjk_iteration_count: int,
   epa_iteration_count: int,
-  epa_best_count: int,
   epa_exact_neg_distance: bool,
   depth_extension: float,
-  multi_polygon_count: int,
-  multi_contact_count: int,
-  multi_tilt_angle: float,
 ):
   key = group_key(type1, type2)
 
@@ -308,7 +356,7 @@ def gjk_epa_pipeline(
       normal = dir_n
 
     plane = mat43()
-    for _it in range(gjk_iteration_count):
+    for _ in range(gjk_iteration_count):
       # Winding orders: plane[0] ccw, plane[1] cw, plane[2] ccw, plane[3] cw.
       plane[0] = wp.cross(simplex[3] - simplex[2], simplex[1] - simplex[2])
       plane[1] = wp.cross(simplex[3] - simplex[0], simplex[2] - simplex[0])
@@ -367,16 +415,6 @@ def gjk_epa_pipeline(
     return simplex, normal
 
 
-  matc3 = wp.types.matrix(shape=(epa_best_count, 3), dtype=float)
-  vecc3 = wp.types.vector(epa_best_count * 3, dtype=float)
-
-  # Matrix definition for the `tris` scratch space which is used to store the
-  # triangles of the polytope. Note that the first dimension is 2, as we need
-  # to store the previous and current polytope. But since Warp doesn't support
-  # 3D matrices yet, we use 2 * 3 * epa_best_count as the first dimension.
-  tris_dim = 3 * epa_best_count
-  mat2c3 = wp.types.matrix(shape=(2 * tris_dim, 3), dtype=float)
-
   # computes contact normal and depth
   @wp.func
   def _epa(
@@ -385,7 +423,6 @@ def gjk_epa_pipeline(
     d:Data,
     g1: int,
     g2: int,
-    epa_best_count: int,
     simplex: mat43,
     input_normal: wp.vec3,
   ):
@@ -409,15 +446,9 @@ def gjk_epa_pipeline(
       # face normals. This gives the exact depth/normal for the non-intersecting
       # case.
       for i in range(6):
-        if i < 3:
-          i1 = 0
-          i2 = i + 1
-        elif i < 5:
-          i1 = 1
-          i2 = i - 1
-        else:
-          i1 = 2
-          i2 = 3
+        i1 = VECI1[i]
+        i2 = VECI2[i]
+
         si1 = simplex[i1]
         si2 = simplex[i2]
         if si1[0] != si2[0] or si1[1] != si2[1] or si1[2] != si2[2]:
@@ -456,93 +487,77 @@ def gjk_epa_pipeline(
     tris[10] = simplex[1]
     tris[11] = simplex[2]
 
+    # Calculate the total number of iterations to avoid nested loop
+    # This is a hack to reduce compile time
     count = int(4)
-    for _iter in range(wp.static(epa_iteration_count)):
-      for i in range(count):
-        # Loop through all triangles, and obtain distances to the origin for each
-        # new triangle candidate.
-        ti = 3 * i
-        n = wp.cross(tris[ti + 2] - tris[ti + 0], tris[ti + 1] - tris[ti + 0])
+    it = int(0)
+    for _ in range(wp.static(epa_iteration_count)):
+      it += count
+      count = wp.min(count * 3, EPS_BEST_COUNT)
 
-        n, nf = gjk_normalize(n)
-        if not nf:
-          for j in range(3):
-            dists[i * 3 + j] = 2e30
-          continue
+    count = int(4)
+    i = int(0)
+    for _ in range(it):
+      # Loop through all triangles, and obtain distances to the origin for each
+      # new triangle candidate.
+      ti = 3 * i
+      n = wp.cross(tris[ti + 2] - tris[ti + 0], tris[ti + 1] - tris[ti + 0])
 
-        dist, pi = wp.static(create_gjk_support_function(type1, type2))(info1, info2, n, m.mesh_vert)
-        p[i] = pi
-        if dist < depth:
-          depth = dist
-          normal = n
-        # Loop through all edges, and get distance using support point p[i].
+      n, nf = gjk_normalize(n)
+      if not nf:
         for j in range(3):
-          if wp.static(epa_exact_neg_distance):
-            # Obtain the closest point between the new triangle edge and the origin.
-            tqj = tris[ti + j]
-            if (p[i, 0] != tqj[0]) or (p[i, 1] != tqj[1]) or (p[i, 2] != tqj[2]):
-              v = p[i] - tris[ti + j]
-              alpha = wp.dot(p[i], v) / wp.dot(v, v)
-              p0 = wp.clamp(alpha, 0.0, 1.0) * v - p[i]
-              p0, pf = gjk_normalize(p0)
-              if pf:
-                dist2, v = wp.static(create_gjk_support_function(type1, type2))(
-                  info1, info2, p0, m.mesh_vert
-                )
-                if dist2 < depth:
-                  depth = dist2
-                  normal = p0
+          dists[i * 3 + j] = 2e30
+        continue
 
-          plane = wp.cross(p[i] - tris[ti + j], tris[ti + ((j + 1) % 3)] - tris[ti + j])
-          plane, pf = gjk_normalize(plane)
-          if pf:
-            dd = wp.dot(plane, tris[ti + j])
-          else:
-            dd = 1e30
+      dist, pi = wp.static(create_gjk_support_function(type1, type2))(info1, info2, n, m.mesh_vert)
+      p[i] = pi
+      if dist < depth:
+        depth = dist
+        normal = n
+      # Loop through all edges, and get distance using support point p[i].
+      for j in range(3):
+        if wp.static(epa_exact_neg_distance):
+          # Obtain the closest point between the new triangle edge and the origin.
+          tqj = tris[ti + j]
+          if (p[i, 0] != tqj[0]) or (p[i, 1] != tqj[1]) or (p[i, 2] != tqj[2]):
+            v = p[i] - tris[ti + j]
+            alpha = wp.dot(p[i], v) / wp.dot(v, v)
+            p0 = wp.clamp(alpha, 0.0, 1.0) * v - p[i]
+            p0, pf = gjk_normalize(p0)
+            if pf:
+              dist2, v = wp.static(create_gjk_support_function(type1, type2))(
+                info1, info2, p0, m.mesh_vert
+              )
+              if dist2 < depth:
+                depth = dist2
+                normal = p0
 
-          if (dd < 0 and depth >= 0) or (
-            tris[ti + ((j + 2) % 3)][0] == p[i][0]
-            and tris[ti + ((j + 2) % 3)][1] == p[i][1]
-            and tris[ti + ((j + 2) % 3)][2] == p[i][2]
-          ):
-            dists[i * 3 + j] = 1e30
-          else:
-            dists[i * 3 + j] = dd
+        plane = wp.cross(p[i] - tris[ti + j], tris[ti + ((j + 1) % 3)] - tris[ti + j])
+        plane, pf = gjk_normalize(plane)
+        if pf:
+          dd = wp.dot(plane, tris[ti + j])
+        else:
+          dd = 1e30
 
-      prevCount = count
-      count = wp.min(count * 3, epa_best_count)
+        if (dd < 0 and depth >= 0) or (
+          tris[ti + ((j + 2) % 3)][0] == p[i][0]
+          and tris[ti + ((j + 2) % 3)][1] == p[i][1]
+          and tris[ti + ((j + 2) % 3)][2] == p[i][2]
+        ):
+          dists[i * 3 + j] = 1e30
+        else:
+          dists[i * 3 + j] = dd
 
-      # Expand the polytope greedily.
-      for j in range(count):
-        bestIndex = int(0)
-        dd = float(dists[0])
-        for i in range(1, 3 * prevCount):
-          if dists[i] < dd:
-            dd = dists[i]
-            bestIndex = i
-
-        dists[bestIndex] = 2e30
-
-        parentIndex = bestIndex // 3
-        childIndex = bestIndex % 3
-        # fill in the new triangle at the next index
-        tris[tris_dim + j * 3 + 0] = tris[parentIndex * 3 + childIndex]
-        tris[tris_dim + j * 3 + 1] = tris[parentIndex * 3 + ((childIndex + 1) % 3)]
-        tris[tris_dim + j * 3 + 2] = p[parentIndex]
-
-      for r in range(epa_best_count * 3):
-        # swap triangles
-        swap = tris[tris_dim + r]
-        tris[tris_dim + r] = tris[r]
-        tris[r] = swap
+      if i == count - 1:
+        prevCount = count
+        count = wp.min(count * 3, EPS_BEST_COUNT)
+        dists, tris = _expand_polytope(count, prevCount, dists, tris, p)
+        i = int(0)
+      else:
+        i += 1
 
     return depth, normal
 
-
-  mat3p = wp.types.matrix(shape=(multi_polygon_count, 3), dtype=float)
-
-  # allocate maximum number of contact points
-  mat3c = wp.types.matrix(shape=(multi_contact_count, 3), dtype=float)
 
   @wp.func
   def _get_multiple_contacts(
@@ -556,10 +571,10 @@ def gjk_epa_pipeline(
   ):
     # Calculates multiple contact points given the normal from EPA.
     #  1. Calculates the polygon on each shape by tiling the normal
-    #     "multi_tilt_angle" degrees in the orthogonal componenet of the normal.
-    #     The "multi_tilt_angle" can be changed to depend on the depth of the
+    #     "MULTI_TILT_ANGLE" degrees in the orthogonal componenet of the normal.
+    #     The "MULTI_TILT_ANGLE" can be changed to depend on the depth of the
     #     contact, in a future version.
-    #  2. The normal is tilted "multi_polygon_count" times in the directions evenly
+    #  2. The normal is tilted "MULTI_POLYGON_COUNT" times in the directions evenly
     #    spaced in the orthogonal component of the normal.
     #    (works well for >= 6, default is 8).
     #  3. The intersection between these two polygons is calculated in 2D space
@@ -576,7 +591,7 @@ def gjk_epa_pipeline(
     dir = orthonormal(normal)
     dir2 = wp.cross(normal, dir)
 
-    angle = multi_tilt_angle * wp.pi / 180.0
+    angle = MULTI_TILT_ANGLE * wp.pi / 180.0
     c = wp.cos(angle)
     s = wp.sin(angle)
     t = 1.0 - c
@@ -591,8 +606,8 @@ def gjk_epa_pipeline(
     v1count = int(0)
     v2count = int(0)
     #return 0, contact_points
-    for i in range(multi_polygon_count):
-      angle = 2.0 * float(i) * wp.pi / float(multi_polygon_count)
+    for i in range(wp.static(MULTI_POLYGON_COUNT)):
+      angle = 2.0 * float(i) * wp.pi / float(MULTI_POLYGON_COUNT)
       axis = wp.cos(angle) * dir + wp.sin(angle) * dir2
 
       # Axis-angle rotation matrix. See
@@ -743,7 +758,7 @@ def gjk_epa_pipeline(
       # from MJX. Deduplicate the points properly.
       last_pt = wp.vec3(FLOAT_MAX, FLOAT_MAX, FLOAT_MAX)
 
-      for k in range(wp.static(multi_contact_count)):
+      for k in range(wp.static(MULTI_CONTACT_COUNT)):
         pt = out[k, 0] * dir + out[k, 1] * dir2 + out[k, 2] * normal
         # Skip contact points that are too close.
         if wp.length(pt - last_pt) <= 1e-6:
@@ -824,7 +839,7 @@ def gjk_epa_pipeline(
               w = (m1 + (1.0 - alpha) * m2 + alpha * m2b) * 0.5
               var_rx = w[0] * dir + w[1] * dir2 + w[2] * normal
 
-      for k in range(wp.static(multi_contact_count)):
+      for k in range(wp.static(MULTI_CONTACT_COUNT)):
         contact_points[k] = var_rx
 
       contact_count = 1
@@ -871,7 +886,6 @@ def gjk_epa_pipeline(
       d,
       g1,
       g2,
-      epa_best_count,
       simplex,
       normal,
     )
@@ -908,12 +922,8 @@ _collision_kernels = {}
 def narrowphase(m: Model, d: Data):
   gjk_iteration_count = 1
   epa_iteration_count = 12
-  epa_best_count = 12
-  epa_exact_neg_distance = True
-  multi_contact_count = 4
-  multi_polygon_count = 8
   depth_extension = 0.1
-  multi_tilt_angle = 1.0
+  epa_exact_neg_distance = False
 
   if len(_collision_kernels) == 0:
     for t2 in range(NUM_GEOM_TYPES):
@@ -924,12 +934,8 @@ def narrowphase(m: Model, d: Data):
             t2,
             gjk_iteration_count,
             epa_iteration_count,
-            epa_best_count,
             epa_exact_neg_distance,
             depth_extension,
-            multi_polygon_count,
-            multi_contact_count,
-            multi_tilt_angle,
           )
 
   for collision_kernel in _collision_kernels.values():
