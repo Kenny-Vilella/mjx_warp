@@ -151,6 +151,8 @@ class ConvexTest(parameterized.TestCase):
     mujoco.mj_forward(m, d)
     mx = mjwarp.put_model(m)
     dx = mjwarp.put_data(m, d)
+    # Enable Gjk algorithm
+    mx.opt.enableGjk = True
     mjwarp.collision(mx, dx)
     mujoco.mj_collision(m, d)
     for i in range(d.ncon):

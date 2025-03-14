@@ -915,7 +915,7 @@ def gjk_epa_pipeline(
 _collision_kernels = {}
 
 
-def narrowphase(m: Model, d: Data):
+def narrowphase_Gjk(m: Model, d: Data):
   if len(_collision_kernels) == 0:
     for t2 in range(NUM_GEOM_TYPES):
       for t1 in range(t2 + 1):
