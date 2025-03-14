@@ -22,6 +22,101 @@ from absl.testing import parameterized
 import mujoco_warp as mjwarp
 
 
+class PrimitiveTest(parameterized.TestCase):
+  """Tests the primitive contact functions."""
+
+  _MJCFS = {
+    "box_plane": """
+        <mujoco>
+          <worldbody>
+            <geom size="40 40 40" type="plane"/>
+            <body pos="0 0 0.3" euler="45 0 0">
+              <freejoint/>
+              <geom size="0.5 0.5 0.5" type="box"/>
+            </body>
+          </worldbody>
+        </mujoco>
+      """,
+    "plane_sphere": """
+        <mujoco>
+          <worldbody>
+            <geom size="40 40 40" type="plane"/>
+            <body pos="0 0 0.2" euler="45 0 0">
+              <freejoint/>
+              <geom size="0.5" type="sphere"/>
+            </body>
+          </worldbody>
+        </mujoco>
+        """,
+    "sphere_sphere": """
+        <mujoco>
+          <worldbody>
+            <body>
+              <joint type="free"/>
+              <geom pos="0 0 0" size="0.2" type="sphere"/>
+            </body>
+            <body >
+              <joint type="free"/>
+              <geom pos="0 0.3 0" size="0.11" type="sphere"/>
+            </body>
+          </worldbody>
+        </mujoco>
+        """,
+    "capsule_capsule": """
+        <mujoco model="two_capsules">
+          <worldbody>
+            <body>
+              <joint type="free"/>
+              <geom fromto="0.62235904  0.58846647 0.651046 1.5330081 0.33564585 0.977849"
+               size="0.05" type="capsule"/>
+            </body>
+            <body>
+              <joint type="free"/>
+              <geom fromto="0.5505271 0.60345304 0.476661 1.3900293 0.30709633 0.932082"
+               size="0.05" type="capsule"/>
+            </body>
+          </worldbody>
+        </mujoco>
+        """,
+    "plane_capsule": """
+        <mujoco>
+          <worldbody>
+            <geom size="40 40 40" type="plane"/>
+            <body pos="0 0 0.0" euler="30 30 0">
+              <freejoint/>
+              <geom size="0.05 0.05" type="capsule"/>
+            </body>
+          </worldbody>
+        </mujoco>
+        """,
+  }
+
+  @parameterized.parameters(
+    "box_plane",
+    "plane_sphere",
+    "sphere_sphere",
+    "plane_capsule",
+    "capsule_capsule",
+  )
+  def test_contact(self, name):
+    """Tests contact calculation with different collision functions."""
+    m = mujoco.MjModel.from_xml_string(self._MJCFS[name])
+    d = mujoco.MjData(m)
+    mujoco.mj_forward(m, d)
+    mx = mjwarp.put_model(m)
+    dx = mjwarp.put_data(m, d)
+    mjwarp.collision(mx, dx)
+    mujoco.mj_collision(m, d)
+    self.assertEqual(d.ncon, dx.ncon.numpy()[0])
+    for i in range(d.ncon):
+      actual_dist = dx.contact.dist.numpy()[i]
+      actual_pos = dx.contact.pos.numpy()[i, :]
+      actual_frame = dx.contact.frame.numpy()[i].flatten()
+      np.testing.assert_array_almost_equal(actual_dist, d.contact.dist[i], 4)
+      np.testing.assert_array_almost_equal(actual_pos, d.contact.pos[i], 4)
+      np.testing.assert_array_almost_equal(actual_frame, d.contact.frame[i], 4)
+
+
 class ConvexTest(parameterized.TestCase):
   """Tests the convex contact functions."""
 
