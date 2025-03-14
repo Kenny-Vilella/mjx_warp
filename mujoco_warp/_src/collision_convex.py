@@ -852,24 +852,23 @@ def gjk_epa_pipeline(
   ):
     tid = wp.tid()
 
-    npair = d.narrowphase_candidate_group_count[key]
-    if tid >= npair:
+    if tid >= d.ncollision[0] or d.collision_type[tid] != key:
       return
 
-    env_id = d.narrowphase_candidate_worldid[key, tid]
-    geoms = d.narrowphase_candidate_geom[key, tid]
+    worldid = d.collision_worldid[tid]
+    geoms = d.collision_pair[tid]
 
     # Check if we generated max contacts for this env.
     # TODO(btaba): move max_contact_points_per_env culling to a point later
     # in the pipline, where we can do a sort on penetration depth per env.
-    if d.ncon[env_id] > d.nconmax:
+    if d.ncon[worldid] > d.nconmax:
       return
 
     g1 = geoms[0]
     g2 = geoms[1]
 
     simplex, normal = _gjk(
-      env_id,
+      worldid,
       m,
       d,
       g1,
@@ -878,7 +877,7 @@ def gjk_epa_pipeline(
 
     # TODO(btaba): get depth from GJK, conditionally run EPA.
     depth, normal = _epa(
-      env_id,
+      worldid,
       m,
       d,
       g1,
@@ -893,7 +892,7 @@ def gjk_epa_pipeline(
 
     # TODO(btaba): split get_multiple_contacts into a separate kernel.
     count, points = _get_multiple_contacts(
-      env_id,
+      worldid,
       m,
       d,
       g1,
@@ -908,6 +907,7 @@ def gjk_epa_pipeline(
       d.contact.geom[cid + i] = geoms
       d.contact.frame[cid + i] = make_frame(normal)
       d.contact.pos[cid + i] = points[i]
+      d.contact.worldid[cid + i] = worldid
 
   return gjk_epa_sparse
 
