@@ -375,7 +375,6 @@ def make_data(
 ) -> types.Data:
   d = types.Data()
   d.nworld = nworld
-  d.nefc_total = wp.zeros((1,), dtype=wp.int32, ndim=1)
 
   # TODO(team): move to Model?
   if nconmax == -1:
@@ -388,7 +387,7 @@ def make_data(
   d.njmax = njmax
 
   d.ncon = wp.zeros(1, dtype=wp.int32)
-  d.nefc = wp.zeros(nworld, dtype=wp.int32)
+  d.nefc = wp.zeros(1, dtype=wp.int32, ndim=1)
   d.nl = 0
   d.time = 0.0
 
@@ -481,7 +480,6 @@ def make_data(
 
   # collision driver
   d.collision_pair = wp.empty(nconmax, dtype=wp.vec2i, ndim=1)
-  d.collision_type = wp.empty(nconmax, dtype=wp.int32, ndim=1)
   d.collision_worldid = wp.empty(nconmax, dtype=wp.int32, ndim=1)
   d.ncollision = wp.zeros(1, dtype=wp.int32, ndim=1)
 
@@ -497,7 +495,6 @@ def put_data(
 ) -> types.Data:
   d = types.Data()
   d.nworld = nworld
-  d.nefc_total = wp.array([mjd.nefc * nworld], dtype=wp.int32, ndim=1)
 
   # TODO(team): move to Model?
   if nconmax == -1:
@@ -514,7 +511,7 @@ def put_data(
 
   d.ncon = wp.array([mjd.ncon * nworld], dtype=wp.int32, ndim=1)
   d.nl = mjd.nl
-  d.nefc = wp.zeros(1, dtype=wp.int32)
+  d.nefc = wp.array([mjd.nefc * nworld], dtype=wp.int32, ndim=1)
   d.time = mjd.time
 
   # TODO(erikfrey): would it be better to tile on the gpu?
@@ -705,7 +702,6 @@ def put_data(
 
   # collision driver
   d.collision_pair = wp.empty(nconmax, dtype=wp.vec2i, ndim=1)
-  d.collision_type = wp.empty(nconmax, dtype=wp.int32, ndim=1)
   d.collision_worldid = wp.empty(nconmax, dtype=wp.int32, ndim=1)
   d.ncollision = wp.zeros(1, dtype=wp.int32, ndim=1)
 
@@ -722,7 +718,7 @@ def get_data_into(
     raise NotImplementedError("only nworld == 1 supported for now")
 
   ncon = d.ncon.numpy()[0]
-  nefc = d.nefc_total.numpy()[0]
+  nefc = d.nefc.numpy()[0]
 
   if ncon != result.ncon or nefc != result.nefc:
     mujoco._functions._realloc_con_efc(result, ncon=ncon, nefc=nefc)

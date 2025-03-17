@@ -57,8 +57,8 @@ def _advance(
 
     # get the high/low range for each actuator state
     limited = m.actuator_actlimited[actid]
-    range_low = wp.select(limited, -wp.inf, m.actuator_actrange[actid][0])
-    range_high = wp.select(limited, wp.inf, m.actuator_actrange[actid][1])
+    range_low = wp.where(limited, m.actuator_actrange[actid][0], -wp.inf)
+    range_high = wp.where(limited, m.actuator_actrange[actid][1], wp.inf)
 
     # get the actual actuation - skip if -1 (means stateless actuator)
     act_adr = m.actuator_actadr[actid]
@@ -77,7 +77,7 @@ def _advance(
 
     # advance the actuation
     if dyn_type == wp.static(DynType.FILTEREXACT.value):
-      tau = wp.select(dyn_prm < MJ_MINVAL, dyn_prm, MJ_MINVAL)
+      tau = wp.where(dyn_prm < MJ_MINVAL, MJ_MINVAL, dyn_prm)
       act = act + act_dot * tau * (1.0 - wp.exp(-m.opt.timestep / tau))
     else:
       act = act + act_dot * m.opt.timestep
@@ -503,15 +503,20 @@ def fwd_velocity(m: Model, d: Data):
 @event_scope
 def fwd_actuation(m: Model, d: Data):
   """Actuation-dependent computations."""
-  if not m.nu:
+  if not m.nu or m.opt.disableflags & DisableBit.ACTUATION:
+    d.act_dot.zero_()
+    d.qfrc_actuator.zero_()
     return
 
   # TODO support stateful actuators
+
+  disable_clampctrl = m.opt.disableflags & DisableBit.CLAMPCTRL
 
   @kernel
   def _force(
     m: Model,
     ctrl: array2df,
+    disable_clampctrl: bool,
     # outputs
     force: array2df,
   ):
@@ -520,7 +525,7 @@ def fwd_actuation(m: Model, d: Data):
     bias = m.actuator_biasprm[dofid, 0]
     # TODO support gain types other than FIXED
     c = ctrl[worldid, dofid]
-    if m.actuator_ctrllimited[dofid]:
+    if m.actuator_ctrllimited[dofid] and not disable_clampctrl:
       r = m.actuator_ctrlrange[dofid]
       c = wp.clamp(c, r[0], r[1])
     f = gain * c + bias
@@ -557,7 +562,10 @@ def fwd_actuation(m: Model, d: Data):
       qfrc[worldid, vid] = s
 
   wp.launch(
-    _force, dim=[d.nworld, m.nu], inputs=[m, d.ctrl], outputs=[d.actuator_force]
+    _force,
+    dim=[d.nworld, m.nu],
+    inputs=[m, d.ctrl, disable_clampctrl],
+    outputs=[d.actuator_force],
   )
 
   if m.opt.is_sparse:
