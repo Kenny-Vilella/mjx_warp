@@ -151,9 +151,14 @@ class GeomType(enum.IntEnum):
   PLANE = mujoco.mjtGeom.mjGEOM_PLANE
   SPHERE = mujoco.mjtGeom.mjGEOM_SPHERE
   CAPSULE = mujoco.mjtGeom.mjGEOM_CAPSULE
+  ELLIPSOID = mujoco.mjtGeom.mjGEOM_ELLIPSOID
+  CYLINDER = mujoco.mjtGeom.mjGEOM_CYLINDER
   BOX = mujoco.mjtGeom.mjGEOM_BOX
-  # unsupported: HFIELD, ELLIPSOID, CYLINDER, MESH,
+  MESH = mujoco.mjtGeom.mjGEOM_MESH
+  # unsupported: HFIELD
   # NGEOMTYPES, ARROW*, LINE, SKIN, LABEL, NONE
+
+NUM_GEOM_TYPES = 7
 
 
 class SolverType(enum.IntEnum):
@@ -679,7 +684,6 @@ class Data:
     segment_indices: broadphase context                         (nworld+1,)
     dyn_geom_aabb: dynamic geometry axis-aligned bounding boxes (nworld, ngeom, 2)
     collision_pair: collision pairs from broadphase             (nconmax,)
-    collision_type: collision types from broadphase             (nconmax,)
     collision_worldid: collision world ids from broadphase      (nconmax,)
     ncollision: collision count from broadphase                 ()
   """

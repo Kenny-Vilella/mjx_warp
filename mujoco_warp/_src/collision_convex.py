@@ -20,19 +20,11 @@ from .types import Data
 from .types import GeomType
 from .types import MJ_MINVAL
 from .types import NUM_GEOM_TYPES
-from .support import where
 from .support import all_same
 from .support import any_different
-from .support import group_key
 from .math import make_frame
-from .collision_functions import get_info
-from .collision_functions import GeomPlane
-from .collision_functions import GeomSphere
-from .collision_functions import GeomCapsule
-from .collision_functions import GeomEllipsoid
-from .collision_functions import GeomCylinder
-from .collision_functions import GeomBox
-from .collision_functions import GeomMesh
+from .collision_functions import _geom
+from .collision_functions import Geom
 
 from typing import Any
 
@@ -69,7 +61,7 @@ VECI2 = vec6(1, 2, 3, 2, 3, 3)
 
 @wp.func
 def gjk_support_plane(
-  info: GeomPlane,
+  info: Geom,
   dir: wp.vec3,
   convex_vert: wp.array(dtype=wp.vec3),
 ):
@@ -91,7 +83,7 @@ def gjk_support_plane(
 
 @wp.func
 def gjk_support_sphere(
-  info: GeomSphere,
+  info: Geom,
   dir: wp.vec3,
   convex_vert: wp.array(dtype=wp.vec3),
 ):
@@ -102,7 +94,7 @@ def gjk_support_sphere(
 @wp.func
 def sign(x: float):
   # XXX we have to match the sign function from CUDA here
-  return where(x < 0.0, -1.0, 1.0)
+  return wp.where(x < 0.0, -1.0, 1.0)
 
 
 @wp.func
@@ -112,7 +104,7 @@ def sign(x: wp.vec3):
 
 @wp.func
 def gjk_support_box(
-  info: GeomBox,
+  info: Geom,
   dir: wp.vec3,
   convex_vert: wp.array(dtype=wp.vec3),
 ):
@@ -124,7 +116,7 @@ def gjk_support_box(
 
 @wp.func
 def gjk_support_capsule(
-  info: GeomCapsule,
+  info: Geom,
   dir: wp.vec3,
   convex_vert: wp.array(dtype=wp.vec3),
 ):
@@ -139,7 +131,7 @@ def gjk_support_capsule(
 
 @wp.func
 def gjk_support_ellipsoid(
-  info: GeomEllipsoid,
+  info: Geom,
   dir: wp.vec3,
   convex_vert: wp.array(dtype=wp.vec3),
 ):
@@ -156,7 +148,7 @@ def gjk_support_ellipsoid(
 
 @wp.func
 def gjk_support_cylinder(
-  info: GeomCylinder,
+  info: Geom,
   dir: wp.vec3,
   convex_vert: wp.array(dtype=wp.vec3),
 ):
@@ -176,7 +168,7 @@ def gjk_support_cylinder(
 
 @wp.func
 def gjk_support_convex(
-  info: GeomMesh,
+  info: Geom,
   dir: wp.vec3,
   convex_vert: wp.array(dtype=wp.vec3),
 ):
@@ -298,7 +290,6 @@ def gjk_epa_pipeline(
   epa_exact_neg_distance: bool,
   depth_extension: float,
 ):
-  key = group_key(type1, type2)
 
   # Calculates whether two objects intersect.
   # Returns simplex and normal.
@@ -309,10 +300,9 @@ def gjk_epa_pipeline(
     d: Data,
     g1: int,
     g2: int,
+    info1: Geom,
+    info2: Geom,
   ):
-    info1 = wp.static(get_info(type1))(g1, m, d.geom_xpos[env_id], d.geom_xmat[env_id])
-    info2 = wp.static(get_info(type2))(g2, m, d.geom_xpos[env_id], d.geom_xmat[env_id])
-
     dir = wp.vec3(0.0, 0.0, 1.0)
     dir_n = -dir
     depth = 1e30
@@ -385,9 +375,9 @@ def gjk_epa_pipeline(
         dplane[3] = wp.dot(plane[3], simplex[0])
 
       # Pick the plane normal with minimum distance to the origin.
-      i1 = where(dplane[0] < dplane[1], 0, 1)
-      i2 = where(dplane[2] < dplane[3], 2, 3)
-      index = where(dplane[i1] < dplane[i2], i1, i2)
+      i1 = wp.where(dplane[0] < dplane[1], 0, 1)
+      i2 = wp.where(dplane[2] < dplane[3], 2, 3)
+      index = wp.where(dplane[i1] < dplane[i2], i1, i2)
       if dplane[index] > 0.0:
         # Origin is inside the simplex, objects are intersecting.
         break
@@ -420,12 +410,11 @@ def gjk_epa_pipeline(
     d: Data,
     g1: int,
     g2: int,
+    info1: Geom,
+    info2: Geom,
     simplex: mat43,
     input_normal: wp.vec3,
   ):
-    info1 = wp.static(get_info(type1))(g1, m, d.geom_xpos[env_id], d.geom_xmat[env_id])
-    info2 = wp.static(get_info(type2))(g2, m, d.geom_xpos[env_id], d.geom_xmat[env_id])
-
     normal = input_normal
 
     # Get the support. If less than 0, objects are not intersecting.
@@ -564,6 +553,8 @@ def gjk_epa_pipeline(
     d: Data,
     g1: int,
     g2: int,
+    info1: Geom,
+    info2: Geom,
     depth: float,
     normal: wp.vec3,
   ):
@@ -580,9 +571,6 @@ def gjk_epa_pipeline(
     #    directions are found. This can be modified to the extremes in the
     #    direction of eigenvectors of the variance of points of each polygon. If
     #    they do not intersect, the closest points of both polygons are found.
-    info1 = wp.static(get_info(type1))(g1, m, d.geom_xpos[env_id], d.geom_xmat[env_id])
-    info2 = wp.static(get_info(type2))(g2, m, d.geom_xpos[env_id], d.geom_xmat[env_id])
-
     if depth < -depth_extension:
       return
 
@@ -851,12 +839,11 @@ def gjk_epa_pipeline(
     d: Data,
   ):
     tid = wp.tid()
-
-    if tid >= d.ncollision[0] or d.collision_type[tid] != key:
-      return
-
     worldid = d.collision_worldid[tid]
     geoms = d.collision_pair[tid]
+    
+    if tid >= d.ncollision[0]:
+      return
 
     # Check if we generated max contacts for this env.
     # TODO(btaba): move max_contact_points_per_env culling to a point later
@@ -867,12 +854,20 @@ def gjk_epa_pipeline(
     g1 = geoms[0]
     g2 = geoms[1]
 
+    if m.geom_type[g1] != type1 or m.geom_type[g2] != type2:
+      return
+
+    info1 = _geom(g1, m, d.geom_xpos[worldid], d.geom_xmat[worldid])
+    info2 = _geom(g2, m, d.geom_xpos[worldid], d.geom_xmat[worldid])
+
     simplex, normal = _gjk(
       worldid,
       m,
       d,
       g1,
       g2,
+      info1,
+      info2,
     )
 
     # TODO(btaba): get depth from GJK, conditionally run EPA.
@@ -882,6 +877,8 @@ def gjk_epa_pipeline(
       d,
       g1,
       g2,
+      info1,
+      info2,
       simplex,
       normal,
     )
@@ -897,6 +894,8 @@ def gjk_epa_pipeline(
       d,
       g1,
       g2,
+      info1,
+      info2,
       depth,
       normal,
     )
