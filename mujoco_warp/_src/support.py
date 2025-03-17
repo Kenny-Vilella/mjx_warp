@@ -196,14 +196,6 @@ def any_different(v0: wp.vec3, v1: wp.vec3) -> wp.bool:
 
 
 @wp.func
-def group_key(type1: wp.int32, type2: wp.int32) -> wp.int32:
-  if type1 > type2:
-    return type2 + type1 * NUM_GEOM_TYPES
-  else:
-    return type1 + type2 * NUM_GEOM_TYPES
-
-
-@wp.func
 def mat33_from_rows(a: wp.vec3, b: wp.vec3, c: wp.vec3):
   return wp.mat33(a, b, c)
 

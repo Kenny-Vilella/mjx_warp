@@ -131,6 +131,7 @@ def gjk_support_geom(
 
   return wp.dot(support_pt, dir), support_pt
 
+
 @wp.func
 def _gjk_support(
   info1: Geom,
@@ -149,6 +150,7 @@ def _gjk_support(
 
   support_pt = s1 - s2
   return dist1 + dist2, support_pt
+
 
 supported_geoms = {
   GeomType.PLANE.value,
@@ -230,16 +232,11 @@ def gjk_epa_pipeline(
   epa_exact_neg_distance: bool,
   depth_extension: float,
 ):
-
   # Calculates whether two objects intersect.
   # Returns simplex and normal.
   @wp.func
   def _gjk(
-    env_id: int,
     m: Model,
-    d: Data,
-    g1: int,
-    g2: int,
     info1: Geom,
     info2: Geom,
   ):
@@ -247,12 +244,8 @@ def gjk_epa_pipeline(
     dir_n = -dir
     depth = 1e30
 
-    dist_max, simplex0 = _gjk_support(
-      info1, info2, type1, type2, dir, m.mesh_vert
-    )
-    dist_min, simplex1 = _gjk_support(
-      info1, info2, type1, type2, dir_n, m.mesh_vert
-    )
+    dist_max, simplex0 = _gjk_support(info1, info2, type1, type2, dir, m.mesh_vert)
+    dist_min, simplex1 = _gjk_support(info1, info2, type1, type2, dir_n, m.mesh_vert)
     if dist_max < dist_min:
       depth = dist_max
       normal = dir
@@ -264,9 +257,7 @@ def gjk_epa_pipeline(
     sd = simplex0 - simplex1
     dir = orthonormal(sd)
 
-    dist_max, simplex3 = _gjk_support(
-      info1, info2, type1, type2, dir, m.mesh_vert
-    )
+    dist_max, simplex3 = _gjk_support(info1, info2, type1, type2, dir, m.mesh_vert)
     # Initialize a 2-simplex with simplex[2]==simplex[1]. This ensures the
     # correct winding order for face normals defined below. Face 0 and face 3
     # are degenerate, and face 1 and 2 have opposing normals.
@@ -345,11 +336,7 @@ def gjk_epa_pipeline(
   # computes contact normal and depth
   @wp.func
   def _epa(
-    env_id: int,
     m: Model,
-    d: Data,
-    g1: int,
-    g2: int,
     info1: Geom,
     info2: Geom,
     simplex: mat43,
@@ -358,9 +345,7 @@ def gjk_epa_pipeline(
     normal = input_normal
 
     # Get the support. If less than 0, objects are not intersecting.
-    depth, _simplex = _gjk_support(
-      info1, info2, type1, type2, normal, m.mesh_vert
-    )
+    depth, _simplex = _gjk_support(info1, info2, type1, type2, normal, m.mesh_vert)
 
     if depth < -depth_extension:
       # Objects are not intersecting, and we do not obtain the closest points as
@@ -384,9 +369,7 @@ def gjk_epa_pipeline(
           p0 = wp.clamp(alpha, 0.0, 1.0) * v - si1
           p0, pf = gjk_normalize(p0)
           if pf:
-            depth2, _ = _gjk_support(
-              info1, info2, type1, type2, p0, m.mesh_vert
-            )
+            depth2, _ = _gjk_support(info1, info2, type1, type2, p0, m.mesh_vert)
             if depth2 < depth:
               depth = depth2
               normal = p0
@@ -435,9 +418,7 @@ def gjk_epa_pipeline(
           dists[i * 3 + j] = 2e30
         continue
 
-      dist, pi = _gjk_support(
-        info1, info2, type1, type2, n, m.mesh_vert
-      )
+      dist, pi = _gjk_support(info1, info2, type1, type2, n, m.mesh_vert)
       p[i] = pi
       if dist < depth:
         depth = dist
@@ -453,9 +434,7 @@ def gjk_epa_pipeline(
             p0 = wp.clamp(alpha, 0.0, 1.0) * v - p[i]
             p0, pf = gjk_normalize(p0)
             if pf:
-              dist2, v = _gjk_support(
-                info1, info2, type1, type2, p0, m.mesh_vert
-              )
+              dist2, v = _gjk_support(info1, info2, type1, type2, p0, m.mesh_vert)
               if dist2 < depth:
                 depth = dist2
                 normal = p0
@@ -488,11 +467,7 @@ def gjk_epa_pipeline(
 
   @wp.func
   def _get_multiple_contacts(
-    env_id: int,
     m: Model,
-    d: Data,
-    g1: int,
-    g2: int,
     info1: Geom,
     info2: Geom,
     depth: float,
@@ -800,45 +775,17 @@ def gjk_epa_pipeline(
     info1 = _geom(g1, m, d.geom_xpos[worldid], d.geom_xmat[worldid])
     info2 = _geom(g2, m, d.geom_xpos[worldid], d.geom_xmat[worldid])
 
-    simplex, normal = _gjk(
-      worldid,
-      m,
-      d,
-      g1,
-      g2,
-      info1,
-      info2,
-    )
+    simplex, normal = _gjk(m, info1, info2)
 
     # TODO(btaba): get depth from GJK, conditionally run EPA.
-    depth, normal = _epa(
-      worldid,
-      m,
-      d,
-      g1,
-      g2,
-      info1,
-      info2,
-      simplex,
-      normal,
-    )
+    depth, normal = _epa(m, info1, info2, simplex, normal)
 
     # TODO(btaba): add support for margin here.
     if depth < 0.0:
       return
 
     # TODO(btaba): split get_multiple_contacts into a separate kernel.
-    count, points = _get_multiple_contacts(
-      worldid,
-      m,
-      d,
-      g1,
-      g2,
-      info1,
-      info2,
-      depth,
-      normal,
-    )
+    count, points = _get_multiple_contacts(m, info1, info2, depth, normal)
 
     cid = wp.atomic_add(d.ncon, 0, count)
     for i in range(count):

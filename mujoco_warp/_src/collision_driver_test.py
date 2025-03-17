@@ -16,7 +16,7 @@
 
 import mujoco
 import numpy as np
-import warp as wp
+from absl.testing import absltest
 from absl.testing import parameterized
 
 import mujoco_warp as mjwarp
@@ -257,15 +257,15 @@ class ConvexTest(parameterized.TestCase):
       # This is because Gjk generates more contact
       result = False
       for j in range(dx.ncon.numpy()[0]):
-          test_dist = dx.contact.dist.numpy()[j]
-          test_pos = dx.contact.pos.numpy()[j, :]
-          test_frame = dx.contact.frame.numpy()[j].flatten()
-          check_dist = np.allclose(actual_dist, test_dist, rtol=5e-2, atol=1.0e-2)
-          check_pos = np.allclose(actual_pos, test_pos, rtol=5e-2, atol=1.0e-2)
-          check_frame = np.allclose(actual_frame, test_frame, rtol=5e-2, atol=1.0e-2)
-          if check_dist and check_pos and check_frame:
-              result = True
-              break
+        test_dist = dx.contact.dist.numpy()[j]
+        test_pos = dx.contact.pos.numpy()[j, :]
+        test_frame = dx.contact.frame.numpy()[j].flatten()
+        check_dist = np.allclose(actual_dist, test_dist, rtol=5e-2, atol=1.0e-2)
+        check_pos = np.allclose(actual_pos, test_pos, rtol=5e-2, atol=1.0e-2)
+        check_frame = np.allclose(actual_frame, test_frame, rtol=5e-2, atol=1.0e-2)
+        if check_dist and check_pos and check_frame:
+          result = True
+          break
       np.testing.assert_equal(result, True, f"Contact {i} not found in Gjk results")
 
 

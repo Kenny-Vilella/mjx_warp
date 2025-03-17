@@ -158,6 +158,7 @@ class GeomType(enum.IntEnum):
   # unsupported: HFIELD
   # NGEOMTYPES, ARROW*, LINE, SKIN, LABEL, NONE
 
+
 NUM_GEOM_TYPES = 8
 
 
@@ -223,6 +224,7 @@ class Option:
   epa_iteration_count: int  # warp only
   epa_exact_neg_distance: bool  # warp only
   depth_extension: float  # warp only
+
 
 @wp.struct
 class Statistic:
