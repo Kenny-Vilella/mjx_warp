@@ -158,7 +158,7 @@ class GeomType(enum.IntEnum):
   # unsupported: HFIELD
   # NGEOMTYPES, ARROW*, LINE, SKIN, LABEL, NONE
 
-NUM_GEOM_TYPES = 7
+NUM_GEOM_TYPES = 8
 
 
 class SolverType(enum.IntEnum):

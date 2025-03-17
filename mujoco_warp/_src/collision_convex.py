@@ -60,38 +60,6 @@ VECI2 = vec6(1, 2, 3, 2, 3, 3)
 
 
 @wp.func
-def gjk_support_plane(
-  info: Geom,
-  dir: wp.vec3,
-  convex_vert: wp.array(dtype=wp.vec3),
-):
-  local_dir = wp.transpose(info.rot) @ dir
-  norm = wp.sqrt(local_dir[0] * local_dir[0] + local_dir[1] * local_dir[1])
-  if norm > 0.0:
-    nx = local_dir[0] / norm
-    ny = local_dir[1] / norm
-  else:
-    nx = 1.0
-    ny = 0.0
-  nz = -float(int(local_dir[2] < 0))
-  # XXX This hardcoded value is suspicious
-  largeSize = 5.0
-  res = wp.vec3(nx * largeSize, ny * largeSize, nz * largeSize)
-  support_pt = info.rot @ res + info.pos
-  return wp.dot(support_pt, dir), support_pt
-
-
-@wp.func
-def gjk_support_sphere(
-  info: Geom,
-  dir: wp.vec3,
-  convex_vert: wp.array(dtype=wp.vec3),
-):
-  support_pt = info.pos + info.radius * dir
-  return wp.dot(support_pt, dir), support_pt
-
-
-@wp.func
 def sign(x: float):
   # XXX we have to match the sign function from CUDA here
   return wp.where(x < 0.0, -1.0, 1.0)
@@ -103,122 +71,94 @@ def sign(x: wp.vec3):
 
 
 @wp.func
-def gjk_support_box(
+def gjk_support_geom(
   info: Geom,
+  typeGeom: int,
   dir: wp.vec3,
   convex_vert: wp.array(dtype=wp.vec3),
 ):
   local_dir = wp.transpose(info.rot) @ dir
-  res = wp.cw_mul(sign(local_dir), info.size)
-  support_pt = info.rot @ res + info.pos
-  return wp.dot(support_pt, dir), support_pt
+  if typeGeom == int(GeomType.PLANE.value):
+    norm = wp.sqrt(local_dir[0] * local_dir[0] + local_dir[1] * local_dir[1])
+    if norm > 0.0:
+      nx = local_dir[0] / norm
+      ny = local_dir[1] / norm
+    else:
+      nx = 1.0
+      ny = 0.0
+    nz = -float(int(local_dir[2] < 0))
+    # XXX This hardcoded value is suspicious
+    largeSize = 5.0
+    res = wp.vec3(nx * largeSize, ny * largeSize, nz * largeSize)
+    support_pt = info.rot @ res + info.pos
+  elif typeGeom == int(GeomType.SPHERE.value):
+    support_pt = info.pos + info.size[0] * dir
+  elif typeGeom == int(GeomType.BOX.value):
+    res = wp.cw_mul(sign(local_dir), info.size)
+    support_pt = info.rot @ res + info.pos
+  elif typeGeom == int(GeomType.CAPSULE.value):
+    res = local_dir * info.size[0]
+    # add cylinder contribution
+    res[2] += sign(local_dir[2]) * info.size[1]
+    support_pt = info.rot @ res + info.pos
+  elif typeGeom == int(GeomType.ELLIPSOID.value):
+    res = wp.cw_mul(local_dir, info.size)
+    res = wp.normalize(res)
+    # transform to ellipsoid
+    res = wp.cw_mul(res, info.size)
+    support_pt = info.rot @ res + info.pos
+  elif typeGeom == int(GeomType.CYLINDER.value):
+    res = wp.vec3(0.0, 0.0, 0.0)
+    # set result in XY plane: support on circle
+    d = wp.sqrt(wp.dot(local_dir, local_dir))
+    if d > MJ_MINVAL:
+      res[0] = local_dir[0] / d * info.size[0]
+      res[1] = local_dir[1] / d * info.size[0]
+    # set result in Z direction
+    res[2] = sign(local_dir[2]) * info.size[1]
+    support_pt = info.rot @ res + info.pos
+  elif typeGeom == int(GeomType.MESH.value):
+    max_dist = float(FLOAT_MIN)
+    # exhaustive search over all vertices
+    # TODO(robotics-simulation): consider hill-climb over graphdata.
+    for i in range(info.vertnum):
+      vert = convex_vert[info.vertadr + i]
+      dist = wp.dot(vert, local_dir)
+      if dist > max_dist:
+        max_dist = dist
+        support_pt = vert
+    support_pt = info.rot @ support_pt + info.pos
 
+  return wp.dot(support_pt, dir), support_pt
 
 @wp.func
-def gjk_support_capsule(
-  info: Geom,
+def _gjk_support(
+  info1: Geom,
+  info2: Geom,
+  type1: int,
+  type2: int,
   dir: wp.vec3,
   convex_vert: wp.array(dtype=wp.vec3),
 ):
-  local_dir = wp.transpose(info.rot) @ dir
-  # start with sphere
-  res = local_dir * info.radius
-  # add cylinder contribution
-  res[2] += sign(local_dir[2]) * info.halfsize
-  support_pt = info.rot @ res + info.pos
-  return wp.dot(support_pt, dir), support_pt
+  # Returns the distance between support points on two geoms, and the support point.
+  # Negative distance means objects are not intersecting along direction `dir`.
+  # Positive distance means objects are intersecting along the given direction `dir`.
 
+  dist1, s1 = gjk_support_geom(info1, type1, dir, convex_vert)
+  dist2, s2 = gjk_support_geom(info2, type2, -dir, convex_vert)
 
-@wp.func
-def gjk_support_ellipsoid(
-  info: Geom,
-  dir: wp.vec3,
-  convex_vert: wp.array(dtype=wp.vec3),
-):
-  local_dir = wp.transpose(info.rot) @ dir
-  # find support point on unit sphere: scale dir by ellipsoid sizes and
-  # renormalize
-  res = wp.cw_mul(local_dir, info.size)
-  res = wp.normalize(res)
-  # transform to ellipsoid
-  res = wp.cw_mul(res, info.size)
-  support_pt = info.rot @ res + info.pos
-  return wp.dot(support_pt, dir), support_pt
+  support_pt = s1 - s2
+  return dist1 + dist2, support_pt
 
-
-@wp.func
-def gjk_support_cylinder(
-  info: Geom,
-  dir: wp.vec3,
-  convex_vert: wp.array(dtype=wp.vec3),
-):
-  local_dir = wp.transpose(info.rot) @ dir
-  res = wp.vec3(0.0, 0.0, 0.0)
-  # set result in XY plane: support on circle
-  d = wp.sqrt(wp.dot(local_dir, local_dir))
-  if d > MJ_MINVAL:
-    res[0] = local_dir[0] / d * info.radius
-    res[1] = local_dir[1] / d * info.radius
-
-  # set result in Z direction
-  res[2] = sign(local_dir[2]) * info.halfsize
-  support_pt = info.rot @ res + info.pos
-  return wp.dot(support_pt, dir), support_pt
-
-
-@wp.func
-def gjk_support_convex(
-  info: Geom,
-  dir: wp.vec3,
-  convex_vert: wp.array(dtype=wp.vec3),
-):
-  local_dir = wp.transpose(info.rot) @ dir
-  support_pt = wp.vec3(0.0, 0.0, 0.0)
-  max_dist = float(FLOAT_MIN)
-  # exhaustive search over all vertices
-  # TODO(robotics-simulation): consider hill-climb over graphdata.
-  # wp.printf("gjk_support_convex--- vert_offset: %d, vert_count: %d\n", info.vert_offset, info.vert_count)
-  # wp.printf("                      local_dir: %f %f %f\n", local_dir[0], local_dir[1], local_dir[2])
-  for i in range(info.vertnum):
-    vert = convex_vert[info.vertadr + i]
-    dist = wp.dot(vert, local_dir)
-    if dist > max_dist:
-      max_dist = dist
-      support_pt = vert
-  support_pt = info.rot @ support_pt + info.pos
-  return wp.dot(support_pt, dir), support_pt
-
-
-support_functions = {
-  GeomType.PLANE.value: gjk_support_plane,
-  GeomType.SPHERE.value: gjk_support_sphere,
-  GeomType.BOX.value: gjk_support_box,
-  GeomType.CAPSULE.value: gjk_support_capsule,
-  GeomType.ELLIPSOID.value: gjk_support_ellipsoid,
-  GeomType.CYLINDER.value: gjk_support_cylinder,
-  GeomType.MESH.value: gjk_support_convex,
+supported_geoms = {
+  GeomType.PLANE.value,
+  GeomType.SPHERE.value,
+  GeomType.BOX.value,
+  GeomType.CAPSULE.value,
+  GeomType.ELLIPSOID.value,
+  GeomType.CYLINDER.value,
+  GeomType.MESH.value,
 }
-
-
-def create_gjk_support_function(type1, type2):
-  @wp.func
-  def _gjk_support(
-    info1: Any,
-    info2: Any,
-    dir: wp.vec3,
-    convex_vert: wp.array(dtype=wp.vec3),
-  ):
-    # Returns the distance between support points on two geoms, and the support point.
-    # Negative distance means objects are not intersecting along direction `dir`.
-    # Positive distance means objects are intersecting along the given direction `dir`.
-
-    dist1, s1 = wp.static(support_functions[type1])(info1, dir, convex_vert)
-    dist2, s2 = wp.static(support_functions[type2])(info2, -dir, convex_vert)
-
-    support_pt = s1 - s2
-    return dist1 + dist2, support_pt
-
-  return _gjk_support
 
 
 @wp.func
@@ -307,11 +247,11 @@ def gjk_epa_pipeline(
     dir_n = -dir
     depth = 1e30
 
-    dist_max, simplex0 = wp.static(create_gjk_support_function(type1, type2))(
-      info1, info2, dir, m.mesh_vert
+    dist_max, simplex0 = _gjk_support(
+      info1, info2, type1, type2, dir, m.mesh_vert
     )
-    dist_min, simplex1 = wp.static(create_gjk_support_function(type1, type2))(
-      info1, info2, dir_n, m.mesh_vert
+    dist_min, simplex1 = _gjk_support(
+      info1, info2, type1, type2, dir_n, m.mesh_vert
     )
     if dist_max < dist_min:
       depth = dist_max
@@ -324,8 +264,8 @@ def gjk_epa_pipeline(
     sd = simplex0 - simplex1
     dir = orthonormal(sd)
 
-    dist_max, simplex3 = wp.static(create_gjk_support_function(type1, type2))(
-      info1, info2, dir, m.mesh_vert
+    dist_max, simplex3 = _gjk_support(
+      info1, info2, type1, type2, dir, m.mesh_vert
     )
     # Initialize a 2-simplex with simplex[2]==simplex[1]. This ensures the
     # correct winding order for face normals defined below. Face 0 and face 3
@@ -383,8 +323,8 @@ def gjk_epa_pipeline(
         break
 
       # Add new support point to the simplex.
-      dist, simplex_i = wp.static(create_gjk_support_function(type1, type2))(
-        info1, info2, plane[index], m.mesh_vert
+      dist, simplex_i = _gjk_support(
+        info1, info2, type1, type2, plane[index], m.mesh_vert
       )
       simplex[index] = simplex_i
       if dist < depth:
@@ -418,8 +358,8 @@ def gjk_epa_pipeline(
     normal = input_normal
 
     # Get the support. If less than 0, objects are not intersecting.
-    depth, _simplex = wp.static(create_gjk_support_function(type1, type2))(
-      info1, info2, normal, m.mesh_vert
+    depth, _simplex = _gjk_support(
+      info1, info2, type1, type2, normal, m.mesh_vert
     )
 
     if depth < -depth_extension:
@@ -444,8 +384,8 @@ def gjk_epa_pipeline(
           p0 = wp.clamp(alpha, 0.0, 1.0) * v - si1
           p0, pf = gjk_normalize(p0)
           if pf:
-            depth2, _ = wp.static(create_gjk_support_function(type1, type2))(
-              info1, info2, p0, m.mesh_vert
+            depth2, _ = _gjk_support(
+              info1, info2, type1, type2, p0, m.mesh_vert
             )
             if depth2 < depth:
               depth = depth2
@@ -495,8 +435,8 @@ def gjk_epa_pipeline(
           dists[i * 3 + j] = 2e30
         continue
 
-      dist, pi = wp.static(create_gjk_support_function(type1, type2))(
-        info1, info2, n, m.mesh_vert
+      dist, pi = _gjk_support(
+        info1, info2, type1, type2, n, m.mesh_vert
       )
       p[i] = pi
       if dist < depth:
@@ -513,8 +453,8 @@ def gjk_epa_pipeline(
             p0 = wp.clamp(alpha, 0.0, 1.0) * v - p[i]
             p0, pf = gjk_normalize(p0)
             if pf:
-              dist2, v = wp.static(create_gjk_support_function(type1, type2))(
-                info1, info2, p0, m.mesh_vert
+              dist2, v = _gjk_support(
+                info1, info2, type1, type2, p0, m.mesh_vert
               )
               if dist2 < depth:
                 depth = dist2
@@ -620,13 +560,13 @@ def gjk_epa_pipeline(
         mat8 * normal[0] + mat9 * normal[1] + mat10 * normal[2],
       )
 
-      _, p = wp.static(support_functions[type1])(info1, n, m.mesh_vert)
+      _, p = gjk_support_geom(info1, type1, n, m.mesh_vert)
       v1[v1count] = wp.vec3(wp.dot(p, dir), wp.dot(p, dir2), wp.dot(p, normal))
       if i != 0 or any_different(v1[v1count], v1[v1count - 1]):
         v1count += 1
 
       n = -n
-      _, p = wp.static(support_functions[type2])(info2, n, m.mesh_vert)
+      _, p = gjk_support_geom(info2, type2, n, m.mesh_vert)
       v2[v2count] = wp.vec3(wp.dot(p, dir), wp.dot(p, dir2), wp.dot(p, normal))
       if i != 0 or any_different(v2[v2count], v2[v2count - 1]):
         v2count += 1
@@ -841,14 +781,14 @@ def gjk_epa_pipeline(
     tid = wp.tid()
     worldid = d.collision_worldid[tid]
     geoms = d.collision_pair[tid]
-    
+
     if tid >= d.ncollision[0]:
       return
 
     # Check if we generated max contacts for this env.
     # TODO(btaba): move max_contact_points_per_env culling to a point later
     # in the pipline, where we can do a sort on penetration depth per env.
-    if d.ncon[worldid] > d.nconmax:
+    if d.ncon[0] > d.nconmax:
       return
 
     g1 = geoms[0]
@@ -918,7 +858,7 @@ def narrowphase_Gjk(m: Model, d: Data):
   if len(_collision_kernels) == 0:
     for t2 in range(NUM_GEOM_TYPES):
       for t1 in range(t2 + 1):
-        if t1 in support_functions and t2 in support_functions:
+        if t1 in supported_geoms and t2 in supported_geoms:
           _collision_kernels[(t1, t2)] = gjk_epa_pipeline(
             t1,
             t2,
