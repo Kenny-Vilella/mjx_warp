@@ -775,13 +775,14 @@ def gjk_epa_pipeline(
     info1 = _geom(g1, m, d.geom_xpos[worldid], d.geom_xmat[worldid])
     info2 = _geom(g2, m, d.geom_xpos[worldid], d.geom_xmat[worldid])
 
+    margin = wp.max(m.geom_margin[g1], m.geom_margin[g2])
+
     simplex, normal = _gjk(m, info1, info2)
 
     # TODO(btaba): get depth from GJK, conditionally run EPA.
     depth, normal = _epa(m, info1, info2, simplex, normal)
 
-    # TODO(btaba): add support for margin here.
-    if depth < 0.0:
+    if (-depth - margin) >= 0.0 or depth != depth:
       return
 
     # TODO(btaba): split get_multiple_contacts into a separate kernel.
