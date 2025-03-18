@@ -66,8 +66,7 @@ def benchmark(
   nconmax: int = -1,
   njmax: int = -1,
   event_trace: bool = False,
-  measure_alloc: bool = False,
-) -> Tuple[float, float, dict, int, list, list]:
+) -> Tuple[float, float, dict, int]:
   """Benchmark a model."""
 
   if solver == "cg":
@@ -91,11 +90,9 @@ def benchmark(
   jit_duration = jit_end - jit_beg
   wp.synchronize()
   trace = {}
-  ncon = []
-  nefc = []
 
   with warp_util.EventTracer(enabled=event_trace) as tracer:
-    # capture the whole function as a CUDA graph
+    # capture the whole smooth.kinematic() function as a CUDA graph
     with wp.ScopedCapture() as capture:
       fn(m, d)
     graph = capture.graph
@@ -107,12 +104,8 @@ def benchmark(
         trace = _sum(trace, tracer.trace())
       else:
         trace = tracer.trace()
-      if measure_alloc:
-        wp.synchronize()
-        ncon.append(d.ncon.numpy()[0])
-        nefc.append(d.nefc.numpy()[0])
     wp.synchronize()
     run_end = time.perf_counter()
     run_duration = run_end - run_beg
 
-  return jit_duration, run_duration, trace, batch_size * nstep, ncon, nefc
+  return jit_duration, run_duration, trace, batch_size * nstep

@@ -40,8 +40,8 @@ def put_model(mjm: mujoco.MjModel) -> types.Model:
   m.opt.gravity = wp.vec3(mjm.opt.gravity)
   m.opt.cone = mjm.opt.cone
   m.opt.solver = mjm.opt.solver
-  m.opt.iterations = mjm.opt.iterations
-  m.opt.ls_iterations = mjm.opt.ls_iterations
+  m.opt.iterations = 50
+  m.opt.ls_iterations = 80
   m.opt.integrator = mjm.opt.integrator
   m.opt.disableflags = mjm.opt.disableflags
   m.opt.impratio = wp.float32(mjm.opt.impratio)
@@ -346,7 +346,7 @@ def _constraint(nv: int, nworld: int, njmax: int) -> types.Constraint:
   efc.beta = wp.empty(shape=(nworld,), dtype=wp.float32)
   efc.beta_num = wp.empty(shape=(nworld,), dtype=wp.float32)
   efc.beta_den = wp.empty(shape=(nworld,), dtype=wp.float32)
-  efc.done = wp.empty(shape=(nworld,), dtype=bool)
+  efc.done = wp.empty(shape=(nworld,), dtype=wp.int32)
 
   efc.ls_done = wp.zeros(shape=(nworld,), dtype=bool)
   efc.p0 = wp.empty(shape=(nworld,), dtype=wp.vec3)
@@ -369,19 +369,20 @@ def make_data(
 ) -> types.Data:
   d = types.Data()
   d.nworld = nworld
+  d.nefc_total = wp.zeros((1,), dtype=wp.int32, ndim=1)
 
   # TODO(team): move to Model?
   if nconmax == -1:
     # TODO(team): heuristic for nconmax
-    nconmax = 512
+    nconmax = 5120
   d.nconmax = nconmax
   if njmax == -1:
     # TODO(team): heuristic for njmax
-    njmax = 512
+    njmax = 5120
   d.njmax = njmax
 
   d.ncon = wp.zeros(1, dtype=wp.int32)
-  d.nefc = wp.zeros(1, dtype=wp.int32, ndim=1)
+  d.nefc = wp.zeros(nworld, dtype=wp.int32)
   d.nl = 0
   d.time = 0.0
 
@@ -460,18 +461,21 @@ def make_data(
   d.qLDiagInv_integration = wp.zeros_like(d.qLDiagInv)
   d.act_vel_integration = wp.zeros_like(d.ctrl)
 
-  # sweep-and-prune broadphase
-  d.sap_geom_sort = wp.zeros((nworld, mjm.ngeom), dtype=wp.vec4)
-  d.sap_projection_lower = wp.zeros((2 * nworld, mjm.ngeom), dtype=wp.float32)
-  d.sap_projection_upper = wp.zeros((nworld, mjm.ngeom), dtype=wp.float32)
-  d.sap_sort_index = wp.zeros((2 * nworld, mjm.ngeom), dtype=wp.int32)
-  d.sap_range = wp.zeros((nworld, mjm.ngeom), dtype=wp.int32)
-  d.sap_cumulative_sum = wp.zeros(nworld * mjm.ngeom, dtype=wp.int32)
+  # the result of the broadphase gets stored in this array
+
+  # internal broadphase tmp arrays
+  d.boxes_sorted = wp.zeros((nworld, mjm.ngeom, 2), dtype=wp.vec3)
+  d.box_projections_lower = wp.zeros((2 * nworld, mjm.ngeom), dtype=wp.float32)
+  d.box_projections_upper = wp.zeros((nworld, mjm.ngeom), dtype=wp.float32)
+  d.box_sorting_indexer = wp.zeros((2 * nworld, mjm.ngeom), dtype=wp.int32)
+  d.ranges = wp.zeros((nworld, mjm.ngeom), dtype=wp.int32)
+  d.cumulative_sum = wp.zeros(nworld * mjm.ngeom, dtype=wp.int32)
   segment_indices_list = [i * mjm.ngeom for i in range(nworld + 1)]
-  d.sap_segment_index = wp.array(segment_indices_list, dtype=int)
+  d.segment_indices = wp.array(segment_indices_list, dtype=int)
 
   # collision driver
   d.collision_pair = wp.empty(nconmax, dtype=wp.vec2i, ndim=1)
+  d.collision_type = wp.empty(nconmax, dtype=wp.int32, ndim=1)
   d.collision_worldid = wp.empty(nconmax, dtype=wp.int32, ndim=1)
   d.ncollision = wp.zeros(1, dtype=wp.int32, ndim=1)
 
@@ -487,15 +491,17 @@ def put_data(
 ) -> types.Data:
   d = types.Data()
   d.nworld = nworld
+  d.nefc_total = wp.array([0], dtype=wp.int32, ndim=1)
+  #d.nefc_total = wp.array([mjd.nefc * nworld], dtype=wp.int32, ndim=1)
 
   # TODO(team): move to Model?
   if nconmax == -1:
     # TODO(team): heuristic for nconmax
-    nconmax = max(512, mjd.ncon * nworld)
+    nconmax = max(5120, mjd.ncon * nworld)
   d.nconmax = nconmax
   if njmax == -1:
     # TODO(team): heuristic for njmax
-    njmax = max(512, mjd.nefc * nworld)
+    njmax = max(5120, mjd.nefc * nworld)
   d.njmax = njmax
 
   if nworld * mjd.nefc > njmax:
@@ -503,7 +509,7 @@ def put_data(
 
   d.ncon = wp.array([mjd.ncon * nworld], dtype=wp.int32, ndim=1)
   d.nl = mjd.nl
-  d.nefc = wp.array([mjd.nefc * nworld], dtype=wp.int32, ndim=1)
+  d.nefc = wp.zeros(1, dtype=wp.int32)
   d.time = mjd.time
 
   # TODO(erikfrey): would it be better to tile on the gpu?
@@ -679,18 +685,22 @@ def put_data(
   d.qLDiagInv_integration = wp.zeros_like(d.qLDiagInv)
   d.act_vel_integration = wp.zeros_like(d.ctrl)
 
-  # broadphase sweep and prune
-  d.sap_geom_sort = wp.zeros((nworld, mjm.ngeom), dtype=wp.vec4)
-  d.sap_projection_lower = wp.zeros((2 * nworld, mjm.ngeom), dtype=wp.float32)
-  d.sap_projection_upper = wp.zeros((nworld, mjm.ngeom), dtype=wp.float32)
-  d.sap_sort_index = wp.zeros((2 * nworld, mjm.ngeom), dtype=wp.int32)
-  d.sap_range = wp.zeros((nworld, mjm.ngeom), dtype=wp.int32)
-  d.sap_cumulative_sum = wp.zeros(nworld * mjm.ngeom, dtype=wp.int32)
+  # the result of the broadphase gets stored in this array
+
+  # internal broadphase tmp arrays
+  d.boxes_sorted = wp.zeros((nworld, mjm.ngeom, 2), dtype=wp.vec3)
+  d.box_projections_lower = wp.zeros((2 * nworld, mjm.ngeom), dtype=wp.float32)
+  d.box_projections_upper = wp.zeros((nworld, mjm.ngeom), dtype=wp.float32)
+  d.box_sorting_indexer = wp.zeros((2 * nworld, mjm.ngeom), dtype=wp.int32)
+  d.ranges = wp.zeros((nworld, mjm.ngeom), dtype=wp.int32)
+  d.cumulative_sum = wp.zeros(nworld * mjm.ngeom, dtype=wp.int32)
   segment_indices_list = [i * mjm.ngeom for i in range(nworld + 1)]
-  d.sap_segment_index = wp.array(segment_indices_list, dtype=int)
+  d.segment_indices = wp.array(segment_indices_list, dtype=int)
+  d.dyn_geom_aabb = wp.zeros((nworld, mjm.ngeom, 2), dtype=wp.vec3)
 
   # collision driver
   d.collision_pair = wp.empty(nconmax, dtype=wp.vec2i, ndim=1)
+  d.collision_type = wp.empty(nconmax, dtype=wp.int32, ndim=1)
   d.collision_worldid = wp.empty(nconmax, dtype=wp.int32, ndim=1)
   d.ncollision = wp.zeros(1, dtype=wp.int32, ndim=1)
 
@@ -707,7 +717,7 @@ def get_data_into(
     raise NotImplementedError("only nworld == 1 supported for now")
 
   ncon = d.ncon.numpy()[0]
-  nefc = d.nefc.numpy()[0]
+  nefc = d.nefc_total.numpy()[0]
 
   if ncon != result.ncon or nefc != result.nefc:
     mujoco._functions._realloc_con_efc(result, ncon=ncon, nefc=nefc)
