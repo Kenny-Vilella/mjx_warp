@@ -23,8 +23,8 @@ from .types import NUM_GEOM_TYPES
 from .support import all_same
 from .support import any_different
 from .math import make_frame
-from .collision_functions import _geom
-from .collision_functions import Geom
+from .collision_primitive import _geom
+from .collision_primitive import Geom
 
 from typing import Any
 
@@ -802,7 +802,7 @@ def gjk_epa_pipeline(
 _collision_kernels = {}
 
 
-def narrowphase_Gjk(m: Model, d: Data):
+def gjk_narrowphase(m: Model, d: Data):
   if len(_collision_kernels) == 0:
     for t2 in range(NUM_GEOM_TYPES):
       for t1 in range(t2 + 1):
