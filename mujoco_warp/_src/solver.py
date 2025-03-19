@@ -29,7 +29,7 @@ def _create_context(m: types.Model, d: types.Data, grad: bool = True):
     worldid = wp.tid()
     d.efc.cost[worldid] = wp.inf
     d.efc.solver_niter[worldid] = 0
-    d.efc.done[worldid] = 0
+    d.efc.done[worldid] = False
     if grad:
       d.efc.search_dot[worldid] = 0.0
 
@@ -62,7 +62,7 @@ def _create_context(m: types.Model, d: types.Data, grad: bool = True):
   wp.launch(_jaref, dim=(d.njmax, m.nv), inputs=[m, d])
 
   # Ma = qM @ qacc
-  support.mul_m(m, d, d.efc.Ma, d.qacc)
+  support.mul_m(m, d, d.efc.Ma, d.qacc, d.efc.done)
 
   _update_constraint(m, d)
   if grad:
@@ -76,6 +76,11 @@ def _update_constraint(m: types.Model, d: types.Data):
   @kernel
   def _init_cost(d: types.Data):
     worldid = wp.tid()
+
+    if wp.static(m.opt.iterations) > 1:
+      if d.efc.done[worldid]:
+        return
+
     d.efc.prev_cost[worldid] = d.efc.cost[worldid]
     d.efc.cost[worldid] = 0.0
     d.efc.gauss[worldid] = 0.0
@@ -88,6 +93,11 @@ def _update_constraint(m: types.Model, d: types.Data):
       return
 
     worldid = d.efc.worldid[efcid]
+
+    if wp.static(m.opt.iterations) > 1:
+      if d.efc.done[worldid]:
+        return
+
     Jaref = d.efc.Jaref[efcid]
     efc_D = d.efc.D[efcid]
 
@@ -105,6 +115,16 @@ def _update_constraint(m: types.Model, d: types.Data):
       d.efc.force[efcid] = 0.0
 
   @kernel
+  def _zero_qfrc_constraint(d: types.Data):
+    worldid, dofid = wp.tid()
+
+    if wp.static(m.opt.iterations) > 1:
+      if d.efc.done[worldid]:
+        return
+
+    d.qfrc_constraint[worldid, dofid] = 0.0
+
+  @kernel
   def _qfrc_constraint(d: types.Data):
     dofid, efcid = wp.tid()
 
@@ -112,6 +132,11 @@ def _update_constraint(m: types.Model, d: types.Data):
       return
 
     worldid = d.efc.worldid[efcid]
+
+    if wp.static(m.opt.iterations) > 1:
+      if d.efc.done[worldid]:
+        return
+
     wp.atomic_add(
       d.qfrc_constraint[worldid],
       dofid,
@@ -121,6 +146,11 @@ def _update_constraint(m: types.Model, d: types.Data):
   @kernel
   def _gauss(d: types.Data):
     worldid, dofid = wp.tid()
+
+    if wp.static(m.opt.iterations) > 1:
+      if d.efc.done[worldid]:
+        return
+
     gauss_cost = (
       0.5
       * (d.efc.Ma[worldid, dofid] - d.qfrc_smooth[worldid, dofid])
@@ -134,7 +164,7 @@ def _update_constraint(m: types.Model, d: types.Data):
   wp.launch(_efc_kernel, dim=(d.njmax,), inputs=[d])
 
   # qfrc_constraint = efc_J.T @ efc_force
-  d.qfrc_constraint.zero_()
+  wp.launch(_zero_qfrc_constraint, dim=(d.nworld, m.nv), inputs=[d])
 
   wp.launch(_qfrc_constraint, dim=(m.nv, d.njmax), inputs=[d])
 
@@ -145,10 +175,26 @@ def _update_constraint(m: types.Model, d: types.Data):
 
 def _update_gradient(m: types.Model, d: types.Data):
   TILE = m.nv
+  ITERATIONS = m.opt.iterations
+
+  @kernel
+  def _zero_grad_dot(d: types.Data):
+    worldid = wp.tid()
+
+    if wp.static(m.opt.iterations) > 1:
+      if d.efc.done[worldid]:
+        return
+
+    d.efc.grad_dot[worldid] = 0.0
 
   @kernel
   def _grad(d: types.Data):
     worldid, dofid = wp.tid()
+
+    if wp.static(m.opt.iterations) > 1:
+      if d.efc.done[worldid]:
+        return
+
     grad = (
       d.efc.Ma[worldid, dofid]
       - d.qfrc_smooth[worldid, dofid]
@@ -161,14 +207,26 @@ def _update_gradient(m: types.Model, d: types.Data):
 
     @kernel
     def _zero_h_lower(m: types.Model, d: types.Data):
+      # TODO(team): static m?
       worldid, elementid = wp.tid()
+
+      if ITERATIONS > 1:
+        if d.efc.done[worldid]:
+          return
+
       rowid = m.dof_tri_row[elementid]
       colid = m.dof_tri_col[elementid]
       d.efc.h[worldid, rowid, colid] = 0.0
 
     @kernel
     def _set_h_qM_lower_sparse(m: types.Model, d: types.Data):
+      # TODO(team): static m?
       worldid, elementid = wp.tid()
+
+      if ITERATIONS > 1:
+        if d.efc.done[worldid]:
+          return
+
       i = m.qM_fullm_i[elementid]
       j = m.qM_fullm_j[elementid]
       d.efc.h[worldid, i, j] = d.qM[worldid, 0, elementid]
@@ -177,17 +235,30 @@ def _update_gradient(m: types.Model, d: types.Data):
 
     @kernel
     def _copy_lower_triangle(m: types.Model, d: types.Data):
+      # TODO(team): static m?
       worldid, elementid = wp.tid()
+
+      if ITERATIONS > 1:
+        if d.efc.done[worldid]:
+          return
+
       rowid = m.dof_tri_row[elementid]
       colid = m.dof_tri_col[elementid]
       d.efc.h[worldid, rowid, colid] = d.qM[worldid, rowid, colid]
 
   @kernel
   def _JTDAJ(m: types.Model, d: types.Data):
+    # TODO(team): static m?
     efcid, elementid = wp.tid()
 
     if efcid >= d.nefc[0]:
       return
+
+    worldid = d.efc.worldid[efcid]
+
+    if ITERATIONS > 1:
+      if d.efc.done[worldid]:
+        return
 
     dofi = m.dof_tri_row[elementid]
     dofj = m.dof_tri_col[elementid]
@@ -197,7 +268,6 @@ def _update_gradient(m: types.Model, d: types.Data):
     if efc_D == 0.0 or active == 0:
       return
 
-    worldid = d.efc.worldid[efcid]
     # TODO(team): sparse efc_J
     wp.atomic_add(
       d.efc.h[worldid, dofi],
@@ -208,35 +278,19 @@ def _update_gradient(m: types.Model, d: types.Data):
   @kernel
   def _cholesky(d: types.Data):
     worldid = wp.tid()
+
+    if wp.static(m.opt.iterations) > 1:
+      if d.efc.done[worldid]:
+        return
+
     mat_tile = wp.tile_load(d.efc.h[worldid], shape=(TILE, TILE))
     fact_tile = wp.tile_cholesky(mat_tile)
     input_tile = wp.tile_load(d.efc.grad[worldid], shape=TILE)
     output_tile = wp.tile_cholesky_solve(fact_tile, input_tile)
     wp.tile_store(d.efc.Mgrad[worldid], output_tile)
 
-  @kernel
-  def _JTDAJ(m: types.Model, d: types.Data):
-    efcid, elementid = wp.tid()
-
-    if efcid >= d.nefc[0]:
-      return
-
-    dofi = m.dof_tri_row[elementid]
-    dofj = m.dof_tri_col[elementid]
-
-    efc_D = d.efc.D[efcid]
-    active = d.efc.active[efcid]
-    if efc_D == 0.0 or active == 0:
-      return
-
-    worldid = d.efc.worldid[efcid]
-    # TODO(team): sparse efc_J
-    # h[worldid, dofi, dofj] += J[efcid, dofi] * J[efcid, dofj] * D[efcid]
-    res = d.efc.J[efcid, dofi] * d.efc.J[efcid, dofj] * efc_D
-    wp.atomic_add(d.efc.h[worldid, dofi], dofj, res)
-
   # grad = Ma - qfrc_smooth - qfrc_constraint
-  d.efc.grad_dot.zero_()
+  wp.launch(_zero_grad_dot, dim=(d.nworld), inputs=[d])
 
   wp.launch(_grad, dim=(d.nworld, m.nv), inputs=[d])
 
@@ -283,54 +337,29 @@ def _safe_div(x: wp.float32, y: wp.float32) -> wp.float32:
 
 
 def _linesearch_iterative(m: types.Model, d: types.Data):
+  ITERATIONS = m.opt.iterations
+
   @kernel
   def _gtol(m: types.Model, d: types.Data):
     # TODO(team): static m?
     worldid = wp.tid()
+
+    if ITERATIONS > 1:
+      if d.efc.done[worldid]:
+        return
+
     snorm = wp.math.sqrt(d.efc.search_dot[worldid])
     scale = m.stat.meaninertia * wp.float(wp.max(1, m.nv))
     d.efc.gtol[worldid] = m.opt.tolerance * m.opt.ls_tolerance * snorm * scale
 
   @kernel
-  def _jv(d: types.Data):
-    efcid, dofid = wp.tid()
-
-    if efcid >= d.nefc[0]:
-      return
-
-    j = d.efc.J[efcid, dofid]
-    search = d.efc.search[d.efc.worldid[efcid], dofid]
-    wp.atomic_add(d.efc.jv, efcid, j * search)
-
-  @kernel
-  def _init_quad_gauss(m: types.Model, d: types.Data):
-    worldid, dofid = wp.tid()
-    search = d.efc.search[worldid, dofid]
-    quad_gauss = wp.vec3()
-    quad_gauss[0] = d.efc.gauss[worldid] / float(m.nv)
-    quad_gauss[1] = search * (d.efc.Ma[worldid, dofid] - d.qfrc_smooth[worldid, dofid])
-    quad_gauss[2] = 0.5 * search * d.efc.mv[worldid, dofid]
-    wp.atomic_add(d.efc.quad_gauss, worldid, quad_gauss)
-
-  @kernel
-  def _init_quad(d: types.Data):
-    efcid = wp.tid()
-
-    if efcid >= d.nefc[0]:
-      return
-
-    Jaref = d.efc.Jaref[efcid]
-    jv = d.efc.jv[efcid]
-    efc_D = d.efc.D[efcid]
-    quad = wp.vec3()
-    quad[0] = 0.5 * Jaref * Jaref * efc_D
-    quad[1] = jv * Jaref * efc_D
-    quad[2] = 0.5 * jv * jv * efc_D
-    d.efc.quad[efcid] = quad
-
-  @kernel
   def _init_p0_gauss(p0: wp.array(dtype=wp.vec3), d: types.Data):
     worldid = wp.tid()
+
+    if wp.static(m.opt.iterations) > 1:
+      if d.efc.done[worldid]:
+        return
+
     quad = d.efc.quad_gauss[worldid]
     p0[worldid] = wp.vec3(quad[0], quad[1], 2.0 * quad[2])
 
@@ -341,11 +370,16 @@ def _linesearch_iterative(m: types.Model, d: types.Data):
     if efcid >= d.nefc[0]:
       return
 
+    worldid = d.efc.worldid[efcid]
+
+    if wp.static(m.opt.iterations) > 1:
+      if d.efc.done[worldid]:
+        return
+
     # TODO(team): active and conditionally active constraints:
     if d.efc.Jaref[efcid] >= 0.0:
       return
 
-    worldid = d.efc.worldid[efcid]
     quad = d.efc.quad[efcid]
     wp.atomic_add(p0, worldid, wp.vec3(quad[0], quad[1], 2.0 * quad[2]))
 
@@ -357,6 +391,10 @@ def _linesearch_iterative(m: types.Model, d: types.Data):
     d: types.Data,
   ):
     worldid = wp.tid()
+
+    if wp.static(m.opt.iterations) > 1:
+      if d.efc.done[worldid]:
+        return
 
     pp0 = p0[worldid]
     alpha = -_safe_div(pp0[1], pp0[2])
@@ -375,6 +413,11 @@ def _linesearch_iterative(m: types.Model, d: types.Data):
       return
 
     worldid = d.efc.worldid[efcid]
+
+    if wp.static(m.opt.iterations) > 1:
+      if d.efc.done[worldid]:
+        return
+
     alpha = lo_alpha[worldid]
 
     # TODO(team): active and conditionally active constraints
@@ -388,8 +431,14 @@ def _linesearch_iterative(m: types.Model, d: types.Data):
     lo_alpha: wp.array(dtype=wp.float32),
     hi: wp.array(dtype=wp.vec3),
     hi_alpha: wp.array(dtype=wp.float32),
+    d: types.Data,
   ):
     worldid = wp.tid()
+
+    if wp.static(m.opt.iterations) > 1:
+      if d.efc.done[worldid]:
+        return
+
     pp0 = p0[worldid]
     plo = lo[worldid]
     plo_alpha = lo_alpha[worldid]
@@ -415,6 +464,10 @@ def _linesearch_iterative(m: types.Model, d: types.Data):
     d: types.Data,
   ):
     worldid = wp.tid()
+
+    if wp.static(m.opt.iterations) > 1:
+      if d.efc.done[worldid]:
+        return
 
     if done[worldid]:
       return
@@ -455,6 +508,10 @@ def _linesearch_iterative(m: types.Model, d: types.Data):
 
     worldid = d.efc.worldid[efcid]
 
+    if wp.static(m.opt.iterations) > 1:
+      if d.efc.done[worldid]:
+        return
+
     if done[worldid]:
       return
 
@@ -494,6 +551,10 @@ def _linesearch_iterative(m: types.Model, d: types.Data):
     d: types.Data,
   ):
     worldid = wp.tid()
+
+    if wp.static(m.opt.iterations) > 1:
+      if d.efc.done[worldid]:
+        return
 
     if done[worldid]:
       return
@@ -555,42 +616,7 @@ def _linesearch_iterative(m: types.Model, d: types.Data):
     alpha = wp.where(improved and not plo_better, phi_alpha, alpha)
     d.efc.alpha[worldid] = alpha
 
-  @kernel
-  def _qacc_ma(d: types.Data):
-    worldid, dofid = wp.tid()
-    alpha = d.efc.alpha[worldid]
-    d.qacc[worldid, dofid] += alpha * d.efc.search[worldid, dofid]
-    d.efc.Ma[worldid, dofid] += alpha * d.efc.mv[worldid, dofid]
-
-  @kernel
-  def _jaref(d: types.Data):
-    efcid = wp.tid()
-
-    if efcid >= d.nefc[0]:
-      return
-
-    d.efc.Jaref[efcid] += d.efc.alpha[d.efc.worldid[efcid]] * d.efc.jv[efcid]
-
   wp.launch(_gtol, dim=(d.nworld,), inputs=[m, d])
-
-  # mv = qM @ search
-  support.mul_m(m, d, d.efc.mv, d.efc.search)
-
-  # jv = efc_J @ search
-  # TODO(team): is there a better way of doing batched matmuls with dynamic array sizes?
-  d.efc.jv.zero_()
-
-  wp.launch(_jv, dim=(d.njmax, m.nv), inputs=[d])
-
-  # prepare quadratics
-  # quad_gauss = [gauss, search.T @ Ma - search.T @ qfrc_smooth, 0.5 * search.T @ mv]
-  d.efc.quad_gauss.zero_()
-
-  wp.launch(_init_quad_gauss, dim=(d.nworld, m.nv), inputs=[m, d])
-
-  # quad = [0.5 * Jaref * Jaref * efc_D, jv * Jaref * efc_D, 0.5 * jv * jv * efc_D]
-
-  wp.launch(_init_quad, dim=(d.njmax), inputs=[d])
 
   # linesearch points
   done = d.efc.ls_done
@@ -619,7 +645,7 @@ def _linesearch_iterative(m: types.Model, d: types.Data):
 
   # set the lo/hi interval bounds
 
-  wp.launch(_init_bounds, dim=(d.nworld,), inputs=[p0, lo, lo_alpha, hi, hi_alpha])
+  wp.launch(_init_bounds, dim=(d.nworld,), inputs=[p0, lo, lo_alpha, hi, hi_alpha, d])
 
   for _ in range(m.opt.ls_iterations):
     # note: we always launch ls_iterations kernels, but the kernels may early exit if done is true
@@ -637,6 +663,207 @@ def _linesearch_iterative(m: types.Model, d: types.Data):
     inputs += [hi_next_alpha, mid, mid_alpha, d]
     wp.launch(_swap, dim=(d.nworld,), inputs=inputs)
 
+
+def _linesearch_parallel(m: types.Model, d: types.Data):
+  ITERATIONS = m.opt.iterations
+
+  @wp.kernel
+  def _quad_total(m: types.Model, d: types.Data):
+    # TODO(team): static m?
+    worldid, alphaid = wp.tid()
+
+    if ITERATIONS > 1:
+      if d.efc.done[worldid]:
+        return
+
+    d.efc.quad_total_candidate[worldid, alphaid] = d.efc.quad_gauss[worldid]
+
+  @kernel
+  def _quad_total_candidate(m: types.Model, d: types.Data):
+    # TODO(team): static m?
+    efcid, alphaid = wp.tid()
+
+    if efcid >= d.nefc[0]:
+      return
+
+    worldid = d.efc.worldid[efcid]
+
+    if ITERATIONS > 1:
+      if d.efc.done[worldid]:
+        return
+
+    x = d.efc.Jaref[efcid] + m.alpha_candidate[alphaid] * d.efc.jv[efcid]
+    # TODO(team): active and conditionally active constraints
+    if x < 0.0:
+      wp.atomic_add(d.efc.quad_total_candidate[worldid], alphaid, d.efc.quad[efcid])
+
+  @kernel
+  def _cost_alpha(m: types.Model, d: types.Data):
+    # TODO(team): static m?
+    worldid, alphaid = wp.tid()
+
+    if ITERATIONS > 1:
+      if d.efc.done[worldid]:
+        return
+
+    alpha = m.alpha_candidate[alphaid]
+    alpha_sq = alpha * alpha
+    quad_total0 = d.efc.quad_total_candidate[worldid, alphaid][0]
+    quad_total1 = d.efc.quad_total_candidate[worldid, alphaid][1]
+    quad_total2 = d.efc.quad_total_candidate[worldid, alphaid][2]
+
+    d.efc.cost_candidate[worldid, alphaid] = (
+      alpha_sq * quad_total2 + alpha * quad_total1 + quad_total0
+    )
+
+  @kernel
+  def _best_alpha(d: types.Data):
+    worldid = wp.tid()
+
+    if wp.static(m.opt.iterations) > 1:
+      if d.efc.done[worldid]:
+        return
+
+    # TODO(team): investigate alternatives to wp.argmin
+    bestid = wp.argmin(d.efc.cost_candidate[worldid])
+    d.efc.alpha[worldid] = m.alpha_candidate[bestid]
+
+  wp.launch(_quad_total, dim=(d.nworld, m.nlsp), inputs=[m, d])
+  wp.launch(_quad_total_candidate, dim=(d.njmax, m.nlsp), inputs=[m, d])
+  wp.launch(_cost_alpha, dim=(d.nworld, m.nlsp), inputs=[m, d])
+  wp.launch(_best_alpha, dim=(d.nworld), inputs=[d])
+
+
+@event_scope
+def _linesearch(m: types.Model, d: types.Data):
+  ITERATIONS = m.opt.iterations
+
+  @kernel
+  def _zero_jv(d: types.Data):
+    efcid = wp.tid()
+
+    if wp.static(m.opt.iterations) > 1:
+      if d.efc.done[d.efc.worldid[efcid]]:
+        return
+
+    d.efc.jv[efcid] = 0.0
+
+  @kernel
+  def _jv(d: types.Data):
+    efcid, dofid = wp.tid()
+
+    if efcid >= d.nefc[0]:
+      return
+
+    worldid = d.efc.worldid[efcid]
+
+    if wp.static(m.opt.iterations) > 1:
+      if d.efc.done[worldid]:
+        return
+
+    j = d.efc.J[efcid, dofid]
+    search = d.efc.search[worldid, dofid]
+    wp.atomic_add(d.efc.jv, efcid, j * search)
+
+  @kernel
+  def _zero_quad_gauss(d: types.Data):
+    worldid = wp.tid()
+
+    if wp.static(m.opt.iterations) > 1:
+      if d.efc.done[worldid]:
+        return
+
+    d.efc.quad_gauss[worldid] = wp.vec3(0.0)
+
+  @kernel
+  def _init_quad_gauss(m: types.Model, d: types.Data):
+    # TODO(team): static m?
+    worldid, dofid = wp.tid()
+
+    if ITERATIONS > 1:
+      if d.efc.done[worldid]:
+        return
+
+    search = d.efc.search[worldid, dofid]
+    quad_gauss = wp.vec3()
+    quad_gauss[0] = d.efc.gauss[worldid] / float(m.nv)
+    quad_gauss[1] = search * (d.efc.Ma[worldid, dofid] - d.qfrc_smooth[worldid, dofid])
+    quad_gauss[2] = 0.5 * search * d.efc.mv[worldid, dofid]
+    wp.atomic_add(d.efc.quad_gauss, worldid, quad_gauss)
+
+  @kernel
+  def _init_quad(d: types.Data):
+    efcid = wp.tid()
+
+    if efcid >= d.nefc[0]:
+      return
+
+    worldid = d.efc.worldid[efcid]
+
+    if wp.static(m.opt.iterations) > 1:
+      if d.efc.done[worldid]:
+        return
+
+    Jaref = d.efc.Jaref[efcid]
+    jv = d.efc.jv[efcid]
+    efc_D = d.efc.D[efcid]
+    quad = wp.vec3()
+    quad[0] = 0.5 * Jaref * Jaref * efc_D
+    quad[1] = jv * Jaref * efc_D
+    quad[2] = 0.5 * jv * jv * efc_D
+    d.efc.quad[efcid] = quad
+
+  @kernel
+  def _qacc_ma(d: types.Data):
+    worldid, dofid = wp.tid()
+
+    if wp.static(m.opt.iterations) > 1:
+      if d.efc.done[worldid]:
+        return
+
+    alpha = d.efc.alpha[worldid]
+    d.qacc[worldid, dofid] += alpha * d.efc.search[worldid, dofid]
+    d.efc.Ma[worldid, dofid] += alpha * d.efc.mv[worldid, dofid]
+
+  @kernel
+  def _jaref(d: types.Data):
+    efcid = wp.tid()
+
+    if efcid >= d.nefc[0]:
+      return
+
+    worldid = d.efc.worldid[efcid]
+
+    if wp.static(m.opt.iterations) > 1:
+      if d.efc.done[worldid]:
+        return
+
+    d.efc.Jaref[efcid] += d.efc.alpha[worldid] * d.efc.jv[efcid]
+
+  # mv = qM @ search
+  support.mul_m(m, d, d.efc.mv, d.efc.search, d.efc.done)
+
+  # jv = efc_J @ search
+  # TODO(team): is there a better way of doing batched matmuls with dynamic array sizes?
+  wp.launch(_zero_jv, dim=(d.njmax), inputs=[d])
+
+  wp.launch(_jv, dim=(d.njmax, m.nv), inputs=[d])
+
+  # prepare quadratics
+  # quad_gauss = [gauss, search.T @ Ma - search.T @ qfrc_smooth, 0.5 * search.T @ mv]
+  wp.launch(_zero_quad_gauss, dim=(d.nworld), inputs=[d])
+
+  wp.launch(_init_quad_gauss, dim=(d.nworld, m.nv), inputs=[m, d])
+
+  # quad = [0.5 * Jaref * Jaref * efc_D, jv * Jaref * efc_D, 0.5 * jv * jv * efc_D]
+
+  wp.launch(_init_quad, dim=(d.njmax), inputs=[d])
+
+  if m.opt.ls_parallel:
+    _linesearch_parallel(m, d)
+  else:
+    _linesearch_iterative(m, d)
+
   wp.launch(_qacc_ma, dim=(d.nworld, m.nv), inputs=[d])
 
   wp.launch(_jaref, dim=(d.njmax,), inputs=[d])
@@ -645,15 +872,26 @@ def _linesearch_iterative(m: types.Model, d: types.Data):
 @event_scope
 def solve(m: types.Model, d: types.Data):
   """Finds forces that satisfy constraints."""
+  ITERATIONS = m.opt.iterations
 
   @kernel
   def _zero_search_dot(d: types.Data):
     worldid = wp.tid()
+
+    if wp.static(m.opt.iterations) > 1:
+      if d.efc.done[worldid]:
+        return
+
     d.efc.search_dot[worldid] = 0.0
 
   @kernel
   def _search_update(d: types.Data):
     worldid, dofid = wp.tid()
+
+    if wp.static(m.opt.iterations) > 1:
+      if d.efc.done[worldid]:
+        return
+
     search = -1.0 * d.efc.Mgrad[worldid, dofid]
 
     if wp.static(m.opt.solver == types.SolverType.CG):
@@ -664,31 +902,51 @@ def solve(m: types.Model, d: types.Data):
 
   @kernel
   def _done(m: types.Model, d: types.Data, solver_niter: int):
+    # TODO(team): static m?
     worldid = wp.tid()
+
+    if ITERATIONS > 1:
+      if d.efc.done[worldid]:
+        return
+
     improvement = _rescale(m, d.efc.prev_cost[worldid] - d.efc.cost[worldid])
     gradient = _rescale(m, wp.math.sqrt(d.efc.grad_dot[worldid]))
-    done = solver_niter >= m.opt.iterations
-    done = done or (improvement < m.opt.tolerance)
-    done = done or (gradient < m.opt.tolerance)
-    d.efc.done[worldid] = int(done)
+    d.efc.done[worldid] = (improvement < m.opt.tolerance) or (
+      gradient < m.opt.tolerance
+    )
 
   if m.opt.solver == types.SolverType.CG:
 
     @kernel
     def _prev_grad_Mgrad(d: types.Data):
       worldid, dofid = wp.tid()
+
+      if wp.static(m.opt.iterations) > 1:
+        if d.efc.done[worldid]:
+          return
+
       d.efc.prev_grad[worldid, dofid] = d.efc.grad[worldid, dofid]
       d.efc.prev_Mgrad[worldid, dofid] = d.efc.Mgrad[worldid, dofid]
 
     @kernel
     def _zero_beta_num_den(d: types.Data):
       worldid = wp.tid()
+
+      if wp.static(m.opt.iterations) > 1:
+        if d.efc.done[worldid]:
+          return
+
       d.efc.beta_num[worldid] = 0.0
       d.efc.beta_den[worldid] = 0.0
 
     @kernel
     def _beta_num_den(d: types.Data):
       worldid, dofid = wp.tid()
+
+      if wp.static(m.opt.iterations) > 1:
+        if d.efc.done[worldid]:
+          return
+
       prev_Mgrad = d.efc.prev_Mgrad[worldid][dofid]
       wp.atomic_add(
         d.efc.beta_num,
@@ -702,6 +960,11 @@ def solve(m: types.Model, d: types.Data):
     @kernel
     def _beta(d: types.Data):
       worldid = wp.tid()
+
+      if wp.static(m.opt.iterations) > 1:
+        if d.efc.done[worldid]:
+          return
+
       d.efc.beta[worldid] = wp.max(
         0.0, d.efc.beta_num[worldid] / wp.max(types.MJ_MINVAL, d.efc.beta_den[worldid])
       )
@@ -712,7 +975,7 @@ def solve(m: types.Model, d: types.Data):
   _create_context(m, d, grad=True)
 
   for i in range(m.opt.iterations):
-    _linesearch_iterative(m, d)
+    _linesearch(m, d)
 
     if m.opt.solver == types.SolverType.CG:
       wp.launch(_prev_grad_Mgrad, dim=(d.nworld, m.nv), inputs=[d])
@@ -733,6 +996,5 @@ def solve(m: types.Model, d: types.Data):
     wp.launch(_search_update, dim=(d.nworld, m.nv), inputs=[d])
 
     wp.launch(_done, dim=(d.nworld,), inputs=[m, d, i])
-    # TODO(team): return if all done
 
   kernel_copy(d.qacc_warmstart, d.qacc)

@@ -138,6 +138,19 @@ class ConeType(enum.IntEnum):
   # unsupported: ELLIPTIC
 
 
+class IntegratorType(enum.IntEnum):
+  """Integrator mode.
+
+  Members:
+    EULER: semi-implicit Euler
+    IMPLICITFAST: implicit in velocity, no rne derivative
+  """
+
+  EULER = mujoco.mjtIntegrator.mjINT_EULER
+  IMPLICITFAST = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
+  # unsupported: RK4, IMPLICIT
+
+
 class GeomType(enum.IntEnum):
   """Type of geometry.
 
@@ -172,6 +185,26 @@ class SolverType(enum.IntEnum):
 
   CG = mujoco.mjtSolver.mjSOL_CG
   NEWTON = mujoco.mjtSolver.mjSOL_NEWTON
+  # unsupported: PGS
+
+
+class SensorType(enum.IntEnum):
+  """Type of sensor.
+
+  Members:
+  """
+
+  pass
+
+
+class EqType(enum.IntEnum):
+  """Type of equality constraint.
+
+  Members:
+  """
+
+  pass
+  # unsupported: CONNECT, WELD, JOINT, TENDON, FLEX, DISTANCE
 
 
 class vec5f(wp.types.vector(length=5, dtype=wp.float32)):
@@ -205,6 +238,7 @@ class Option:
     ls_iterations: maximum number of CG/Newton linesearch iterations
     disableflags: bit flags for disabling standard features
     is_sparse: whether to use sparse representations
+    ls_parallel: evaluate engine solver step sizes in parallel
   """
 
   timestep: float
@@ -224,6 +258,7 @@ class Option:
   epa_iteration_count: int  # warp only
   epa_exact_neg_distance: bool  # warp only
   depth_extension: float  # warp only
+  ls_parallel: bool
 
 
 @wp.struct
@@ -286,6 +321,8 @@ class Constraint:
     hi_next_alpha: alpha for next high point          (nworld,)
     mid: loss at mid_alpha                            (nworld, 3)
     mid_alpha: midpoint between lo_alpha and hi_alpha (nworld,)
+    cost_candidate: costs associated with step sizes  (nworld, nlsp)
+    quad_total_candidate: quad_total for step sizes   (nworld, nlsp, 3)
   """
 
   worldid: wp.array(dtype=wp.int32, ndim=1)
@@ -319,7 +356,8 @@ class Constraint:
   beta: wp.array(dtype=wp.float32, ndim=1)
   beta_num: wp.array(dtype=wp.float32, ndim=1)
   beta_den: wp.array(dtype=wp.float32, ndim=1)
-  done: wp.array(dtype=wp.int32, ndim=1)
+  done: wp.array(dtype=bool, ndim=1)
+  # linesearch
   ls_done: wp.array(dtype=bool, ndim=1)
   p0: wp.array(dtype=wp.vec3, ndim=1)
   lo: wp.array(dtype=wp.vec3, ndim=1)
@@ -332,6 +370,8 @@ class Constraint:
   hi_next_alpha: wp.array(dtype=wp.float32, ndim=1)
   mid: wp.array(dtype=wp.vec3, ndim=1)
   mid_alpha: wp.array(dtype=wp.float32, ndim=1)
+  cost_candidate: wp.array(dtype=wp.float32, ndim=2)
+  quad_total_candidate: wp.array(dtype=wp.vec3f, ndim=2)
 
 
 @wp.struct
@@ -350,6 +390,7 @@ class Model:
     nexclude: number of excluded geom pairs                  ()
     nmocap: number of mocap bodies                           ()
     nM: number of non-zeros in sparse inertia matrix         ()
+    nlsp: number of step sizes for parallel linsearch        ()
     opt: physics options
     stat: model statistics
     qpos0: qpos values at default pose                       (nq,)
@@ -361,6 +402,7 @@ class Model:
     actuator_moment_tileadr: tiling configuration
     actuator_moment_tilesize_nv: tiling configuration
     actuator_moment_tilesize_nu: tiling configuration
+    alpha_candidate: step size candidates for engine solver  (nlsp,)
     qM_fullm_i: sparse mass matrix addressing
     qM_fullm_j: sparse mass matrix addressing
     qM_mulm_i: sparse mass matrix addressing
@@ -470,6 +512,7 @@ class Model:
   nexclude: int
   nmocap: int
   nM: int
+  nlsp: int  # warp only
   opt: Option
   stat: Statistic
   qpos0: wp.array(dtype=wp.float32, ndim=1)
@@ -481,6 +524,7 @@ class Model:
   actuator_moment_tileadr: wp.array(dtype=wp.int32, ndim=1)  # warp only
   actuator_moment_tilesize_nv: wp.array(dtype=wp.int32, ndim=1)  # warp only
   actuator_moment_tilesize_nu: wp.array(dtype=wp.int32, ndim=1)  # warp only
+  alpha_candidate: wp.array(dtype=wp.float32, ndim=1)  # warp only
   qM_fullm_i: wp.array(dtype=wp.int32, ndim=1)  # warp only
   qM_fullm_j: wp.array(dtype=wp.int32, ndim=1)  # warp only
   qM_mulm_i: wp.array(dtype=wp.int32, ndim=1)  # warp only
@@ -751,15 +795,14 @@ class Data:
   qLD_integration: wp.array(dtype=wp.float32, ndim=3)
   qLDiagInv_integration: wp.array(dtype=wp.float32, ndim=2)
 
-  # sweep and prune broadphase arrays
-  boxes_sorted: wp.array(dtype=wp.vec3, ndim=3)
-  box_projections_lower: wp.array(dtype=wp.float32, ndim=2)
-  box_projections_upper: wp.array(dtype=wp.float32, ndim=2)
-  box_sorting_indexer: wp.array(dtype=wp.int32, ndim=2)
-  ranges: wp.array(dtype=wp.int32, ndim=2)
-  cumulative_sum: wp.array(dtype=wp.int32, ndim=1)
-  segment_indices: wp.array(dtype=wp.int32, ndim=1)
-  dyn_geom_aabb: wp.array(dtype=wp.vec3, ndim=3)
+  # sweep-and-prune broadphase
+  sap_geom_sort: wp.array(dtype=wp.vec4, ndim=2)
+  sap_projection_lower: wp.array(dtype=wp.float32, ndim=2)
+  sap_projection_upper: wp.array(dtype=wp.float32, ndim=2)
+  sap_sort_index: wp.array(dtype=wp.int32, ndim=2)
+  sap_range: wp.array(dtype=wp.int32, ndim=2)
+  sap_cumulative_sum: wp.array(dtype=wp.int32, ndim=1)
+  sap_segment_index: wp.array(dtype=wp.int32, ndim=1)
 
   # collision driver
   collision_pair: wp.array(dtype=wp.vec2i, ndim=1)
